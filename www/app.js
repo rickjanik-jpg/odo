@@ -8,6 +8,8 @@
 
   const cap = window.Capacitor;
   const isNative = !!(cap && cap.isNativePlatform && cap.isNativePlatform());
+  const PLATFORM = isNative && cap.getPlatform ? cap.getPlatform() : '';
+  let nativeError = '';
   const Tracker = isNative
     ? (cap.registerPlugin ? cap.registerPlugin('OdoTracker') : cap.Plugins.OdoTracker)
     : makeMock();
@@ -137,7 +139,12 @@
   }
 
   async function loadStatus() {
-    try { state.status = await Tracker.getStatus(); } catch (e) { /* keep last */ }
+    try {
+      state.status = await Tracker.getStatus();
+      nativeError = '';
+    } catch (e) {
+      nativeError = (e && (e.message || e.code)) || String(e);
+    }
     renderChrome();
   }
 
@@ -177,7 +184,7 @@
       return false;
     }
     if (!state.status.background) {
-      const ios = state.status.platform === 'ios';
+      const ios = state.status.platform === 'ios' || PLATFORM === 'ios';
       toast(ios ? 'Choose “Change to Always Allow” so drives record with Odo closed'
         : 'Choose "Allow all the time" so drives record with the app closed');
       if (!(await request('background'))) {
@@ -345,7 +352,11 @@
         <label class="switch"><input type="checkbox" id="autoToggle" ${s.auto ? 'checked' : ''}/><span></span></label>
       </div></div>`;
 
-    const ios = s.platform === 'ios';
+    const ios = s.platform === 'ios' || PLATFORM === 'ios';
+    if (nativeError) {
+      html += `<div class="card banner"><p><strong>Odo’s tracker isn’t connected</strong>
+        Send this to Claude: ${esc(PLATFORM)} · ${esc(nativeError)}</p></div>`;
+    }
     if ((isNative || s.platform) && ios) {
       const steps = [
         ['location', 'Location', 'So Odo can measure your miles.', 'Allow'],
@@ -412,7 +423,7 @@
       <input type="number" id="rateInput" step="0.5" min="0" max="200" value="${Math.round(state.rate * 1000) / 10}" style="width:96px;text-align:right" />
     </div></div>`;
 
-    html += `<p class="note">Odo test build 0.2. Your trips stay on this phone.</p>`;
+    html += `<p class="note">Odo test build 0.3. Your trips stay on this phone.</p>`;
     if (!isNative) html += '<p class="dev-note">Browser preview: sample trips, no GPS.</p>';
     return html;
   }
@@ -534,7 +545,7 @@
     else if (act === 'close') closeSheet();
     else if (act === 'perm') {
       const k = el.dataset.k;
-      const ios = state.status.platform === 'ios';
+      const ios = state.status.platform === 'ios' || PLATFORM === 'ios';
       if (k === 'batteryUnrestricted') {
         await Tracker.openBatterySettings();
       } else if (k === 'precise') {
@@ -615,7 +626,14 @@
   (async function init() {
     try {
       Tracker.addListener('tripsChanged', () => loadTrips());
-      Tracker.addListener('trackingChanged', (s) => { state.status = s; renderChrome(); });
+      Tracker.addListener('trackingChanged', (s) => {
+        const permsChanged = ['location', 'background', 'precise', 'activity', 'notifications', 'auto', 'dashing']
+          .some((k) => state.status[k] !== s[k]);
+        state.status = s;
+        // Refresh the setup checklist when a permission answer comes in, unless someone is typing.
+        const typing = document.activeElement && /INPUT|SELECT/.test(document.activeElement.tagName);
+        if (permsChanged && !typing && $('sheet').hidden) render(); else renderChrome();
+      });
     } catch (e) { /* listeners are a bonus; polling covers it */ }
     await loadPrefs();
     await loadStatus();

@@ -116,7 +116,9 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
             done()
             return
         }
-        waitForAuth(done)
+        // When the answer is still "not asked", iPhone always shows the prompt: wait for the answer itself.
+        // Upgrading to Always may show no prompt (iPhone only asks once), so that case also finishes on its own.
+        waitForAuth(done, promptCertain: s == .notDetermined)
         if always { manager.requestAlwaysAuthorization() } else { manager.requestWhenInUseAuthorization() }
     }
 
@@ -127,8 +129,13 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
         var tokens: [NSObjectProtocol] = []
     }
 
-    private func waitForAuth(_ done: @escaping () -> Void) {
+    private func waitForAuth(_ done: @escaping () -> Void, promptCertain: Bool) {
         authWaiters.append(done)
+        if promptCertain {
+            // locationManagerDidChangeAuthorization finishes this when the person answers.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in self?.flushAuthWaiters() }
+            return
+        }
         let w = AuthWait()
         let nc = NotificationCenter.default
         let finish: () -> Void = { [weak self] in
@@ -145,7 +152,7 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
         w.tokens.append(nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
             if w.resigned { finish() }
         })
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { if !w.resigned { finish() } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { if !w.resigned { finish() } }
         DispatchQueue.main.asyncAfter(deadline: .now() + 90) { finish() }
     }
 
@@ -185,7 +192,8 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        flushAuthWaiters()
+        // iPhone also calls this once at startup; only a real answer should finish a waiting request.
+        if manager.authorizationStatus != .notDetermined { flushAuthWaiters() }
         arm()
     }
 

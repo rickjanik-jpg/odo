@@ -67,4 +67,37 @@ if (added) {
   fs.writeFileSync(plistPath, plist);
 }
 
+// 5. Register the tracker plugin by class name too. "npx cap sync" rewrites this file,
+//    so this script runs again after sync.
+const capConfigPath = path.join(appDir, 'capacitor.config.json');
+if (fs.existsSync(capConfigPath)) {
+  const cfg = JSON.parse(fs.readFileSync(capConfigPath, 'utf8'));
+  const list = Array.isArray(cfg.packageClassList) ? cfg.packageClassList : [];
+  if (!list.includes('OdoTrackerPlugin')) {
+    cfg.packageClassList = list.concat('OdoTrackerPlugin');
+    fs.writeFileSync(capConfigPath, JSON.stringify(cfg, null, '\t') + '\n');
+  }
+}
+
+// 6. App icon.
+const iconSrc = path.join(root, 'native', 'ios', 'icon', 'AppIcon-1024.png');
+const iconSet = path.join(appDir, 'Assets.xcassets', 'AppIcon.appiconset');
+const contentsPath = path.join(iconSet, 'Contents.json');
+if (fs.existsSync(iconSrc) && fs.existsSync(contentsPath)) {
+  const { execFileSync } = require('child_process');
+  const contents = JSON.parse(fs.readFileSync(contentsPath, 'utf8'));
+  for (const img of contents.images || []) {
+    if (!img.filename) continue;
+    const dest = path.join(iconSet, img.filename);
+    const pts = parseFloat(String(img.size || '1024').split('x')[0]);
+    const scale = parseFloat(String(img.scale || '1x'));
+    const px = Math.round(pts * scale);
+    if (px === 1024) {
+      fs.copyFileSync(iconSrc, dest);
+    } else if (process.platform === 'darwin') {
+      execFileSync('sips', ['-z', String(px), String(px), iconSrc, '--out', dest], { stdio: 'ignore' });
+    }
+  }
+}
+
 console.log('Odo native code added to the iPhone project.');

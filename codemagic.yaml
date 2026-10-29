@@ -28,6 +28,7 @@ workflows:
           gem list -i xcodeproj > /dev/null || gem install xcodeproj --no-document
           ruby scripts/ios-add-files.rb ios/App/App.xcodeproj
           npx cap sync ios
+          npm run patch:ios
 
       - name: Set up code signing
         script: xcode-project use-profiles
@@ -51,4 +52,5 @@ workflows:
     publishing:
       app_store_connect:
         auth: integration
-        submit_to_testflight: true
+        # Internal testing (you) doesn't need Apple's beta review. Set to true later for outside testers.
+        submit_to_testflight: false
