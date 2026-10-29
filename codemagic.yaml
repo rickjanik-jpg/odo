@@ -1,0 +1,54 @@
+# Builds the iPhone version on Codemagic's Macs and sends it to TestFlight.
+# One-time setup is in SETUP-IPHONE.md. Each run uses roughly 10-20 of the free 500 monthly minutes.
+workflows:
+  ios-testflight:
+    name: Odo iPhone to TestFlight
+    max_build_duration: 45
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: Odo API key
+    environment:
+      node: 22
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.odomiles.app
+    scripts:
+      - name: Install packages
+        script: npm install
+
+      - name: Create the iPhone project and add Odo's code
+        script: |
+          set -e
+          npm run vendor
+          rm -rf ios
+          npx cap add ios
+          npm run patch:ios
+          gem list -i xcodeproj > /dev/null || gem install xcodeproj --no-document
+          ruby scripts/ios-add-files.rb ios/App/App.xcodeproj
+          npx cap sync ios
+
+      - name: Set up code signing
+        script: xcode-project use-profiles
+
+      - name: Set build number
+        script: /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" ios/App/App/Info.plist
+
+      - name: Build
+        script: |
+          set -e
+          if [ -f ios/App/App.xcworkspace/contents.xcworkspacedata ]; then
+            xcode-project build-ipa --workspace ios/App/App.xcworkspace --scheme App
+          else
+            xcode-project build-ipa --project ios/App/App.xcodeproj --scheme App
+          fi
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true

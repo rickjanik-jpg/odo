@@ -1,0 +1,23 @@
+{
+  "name": "odo",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Odo - free automatic mileage tracker (Android and iPhone test builds)",
+  "scripts": {
+    "vendor": "node scripts/copy-vendor.js",
+    "patch": "node scripts/patch-android.js",
+    "setup": "npm run vendor && npx cap add android && npm run patch && npx cap sync android",
+    "sync": "npm run vendor && npm run patch && npx cap sync android",
+    "open": "npx cap open android",
+    "patch:ios": "node scripts/patch-ios.js"
+  },
+  "dependencies": {
+    "@capacitor/android": "latest",
+    "@capacitor/core": "latest",
+    "@capacitor/ios": "latest",
+    "leaflet": "^1.9.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "latest"
+  }
+}

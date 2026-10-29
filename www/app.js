@@ -1,0 +1,717 @@
+/* Odo - app screens. Talks to the native tracker on Android; uses sample data in a desktop browser. */
+(function () {
+  'use strict';
+
+  const DEFAULT_RATE = 0.725; // IRS 2026 business standard mileage rate, $ per mile
+  const RATE_KEY = 'odo.rate';
+  const PERIOD_KEY = 'odo.period';
+
+  const cap = window.Capacitor;
+  const isNative = !!(cap && cap.isNativePlatform && cap.isNativePlatform());
+  const Tracker = isNative
+    ? (cap.registerPlugin ? cap.registerPlugin('OdoTracker') : cap.Plugins.OdoTracker)
+    : makeMock();
+
+  const state = {
+    tab: 'trips',
+    trips: [],
+    status: {},
+    prefs: { gigs: ['DoorDash'], prompt: 'Are you dashing?' },
+    period: safeGet(PERIOD_KEY) || 'week',
+    offset: 0,
+    rate: parseFloat(safeGet(RATE_KEY)) || DEFAULT_RATE,
+    openTripId: null,
+    otherPurpose: false,
+  };
+  let leafletMap = null;
+  let pollTimer = null;
+
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- helpers ----------
+
+  function safeGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function safeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* ignore */ } }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  const mi = (n) => (Math.round((n || 0) * 10) / 10).toFixed(1);
+  const money = (n) => (n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+  const timeFmt = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' });
+  const dayFmt = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  const monFmt = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+
+  function toast(msg, ms) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.hidden = false;
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => { t.hidden = true; }, ms || 2800);
+  }
+
+  function startOfDay(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
+  function monday(d) {
+    const x = startOfDay(d);
+    x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+    return x;
+  }
+
+  function range(kind, off) {
+    const now = new Date();
+    let s, e;
+    if (kind === 'week') {
+      s = monday(now); s.setDate(s.getDate() + 7 * off);
+      e = new Date(s); e.setDate(e.getDate() + 7);
+    } else if (kind === '2wk') {
+      s = monday(now); s.setDate(s.getDate() - 7 + 14 * off);
+      e = new Date(s); e.setDate(e.getDate() + 14);
+    } else if (kind === 'month') {
+      s = new Date(now.getFullYear(), now.getMonth() + off, 1);
+      e = new Date(s.getFullYear(), s.getMonth() + 1, 1);
+    } else {
+      s = new Date(now.getFullYear() + off, 0, 1);
+      e = new Date(s.getFullYear() + 1, 0, 1);
+    }
+    return { s, e };
+  }
+
+  function rangeLabel(kind, r) {
+    const thisYear = new Date().getFullYear();
+    if (kind === 'year') return String(r.s.getFullYear());
+    if (kind === 'month') {
+      return r.s.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    }
+    const last = new Date(r.e.getTime() - 86400000);
+    const sameMonth = last.getMonth() === r.s.getMonth();
+    let label = monFmt.format(r.s) + ' – ' + (sameMonth ? last.getDate() : monFmt.format(last));
+    if (last.getFullYear() !== thisYear) label += ', ' + last.getFullYear();
+    return label;
+  }
+
+  function duration(ms) {
+    const m = Math.max(1, Math.round(ms / 60000));
+    return m < 60 ? m + ' min' : Math.floor(m / 60) + ' hr ' + (m % 60) + ' min';
+  }
+
+  /** SVG path for a route, scaled to fit a w x h box. */
+  function routeD(path, w, h, pad) {
+    if (!path || path.length === 0) return '';
+    const lat0 = path.reduce((a, p) => a + p[0], 0) / path.length;
+    const k = Math.cos((lat0 * Math.PI) / 180);
+    const pts = path.map((p) => [p[1] * k, -p[0]]);
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [x, y] of pts) {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    const spanX = Math.max(maxX - minX, 1e-6), spanY = Math.max(maxY - minY, 1e-6);
+    const scale = Math.min((w - 2 * pad) / spanX, (h - 2 * pad) / spanY);
+    const offX = (w - spanX * scale) / 2, offY = (h - spanY * scale) / 2;
+    if (pts.length === 1) {
+      const cx = w / 2, cy = h / 2;
+      return `M${cx - 1} ${cy}L${cx + 1} ${cy}`;
+    }
+    return pts.map(([x, y], i) =>
+      (i ? 'L' : 'M') + ((x - minX) * scale + offX).toFixed(1) + ' ' + ((y - minY) * scale + offY).toFixed(1)
+    ).join('');
+  }
+
+  function workLabel() {
+    const g = state.prefs.gigs;
+    return g.length ? g[0] : 'Work';
+  }
+
+  // ---------- data ----------
+
+  async function loadTrips() {
+    try {
+      const r = await Tracker.getTrips();
+      const list = r.json ? JSON.parse(r.json) : (r.trips || []);
+      state.trips = list.slice().sort((a, b) => b.start - a.start);
+    } catch (e) {
+      toast('Could not load trips');
+    }
+    render();
+  }
+
+  async function loadStatus() {
+    try { state.status = await Tracker.getStatus(); } catch (e) { /* keep last */ }
+    renderChrome();
+  }
+
+  async function loadPrefs() {
+    try {
+      const p = await Tracker.getPrefs();
+      state.prefs = { gigs: p.gigs || [], prompt: p.prompt || 'Are you dashing?' };
+    } catch (e) { /* defaults */ }
+  }
+
+  async function setTrip(id, patch) {
+    const t = state.trips.find((x) => x.id === id);
+    if (t) Object.assign(t, patch);
+    render();
+    if (state.openTripId === id) renderSheet();
+    try { await Tracker.updateTrip(Object.assign({ id }, patch)); } catch (e) { toast('Could not save that change'); }
+  }
+
+  async function savePrefs() {
+    try { await Tracker.setPrefs({ gigs: state.prefs.gigs, prompt: state.prefs.prompt }); } catch (e) { toast('Could not save settings'); }
+  }
+
+  // ---------- permissions ----------
+
+  async function request(alias) {
+    try { state.status = await Tracker.requestPerm({ alias }); } catch (e) { /* user declined */ }
+    renderChrome();
+    if (state.tab === 'settings') render();
+    return !!state.status[alias];
+  }
+
+  /** Walks through what automatic tracking needs. Returns true when everything is granted. */
+  async function ensureAutoPerms() {
+    const s = state.status;
+    if (!s.location && !(await request('location'))) {
+      toast('Odo needs location to measure miles');
+      return false;
+    }
+    if (!state.status.background) {
+      const ios = state.status.platform === 'ios';
+      toast(ios ? 'Choose “Change to Always Allow” so drives record with Odo closed'
+        : 'Choose "Allow all the time" so drives record with the app closed');
+      if (!(await request('background'))) {
+        if (ios) {
+          toast('In Settings, tap Location, then choose Always', 5000);
+          await Tracker.openAppSettings();
+        }
+        return false;
+      }
+    }
+    if (!state.status.activity && !(await request('activity'))) {
+      toast('Physical activity lets Odo notice when you start driving');
+      return false;
+    }
+    if (!state.status.notifications) await request('notifications');
+    return true;
+  }
+
+  async function toggleAuto(on) {
+    if (on && isNative && !(await ensureAutoPerms())) { render(); return; }
+    try { state.status = await Tracker.setAuto({ enabled: on }); } catch (e) { toast('Could not change that setting'); }
+    render();
+    if (on) toast('Automatic tracking is on. Just drive.');
+  }
+
+  // ---------- start / stop ----------
+
+  async function onFab() {
+    if (state.status.tracking) {
+      try { await Tracker.stopTrip(); } catch (e) { /* ignore */ }
+      setTimeout(() => { loadStatus(); loadTrips(); }, 600);
+      return;
+    }
+    if (isNative && !state.status.location && !(await request('location'))) {
+      toast('Odo needs location to record a drive');
+      return;
+    }
+    if (isNative && !state.status.notifications) await request('notifications');
+    try {
+      state.status = await Tracker.startManual();
+      renderChrome();
+    } catch (e) {
+      toast(e && e.message ? e.message : 'Could not start recording');
+    }
+  }
+
+  function startPolling() {
+    clearInterval(pollTimer);
+    pollTimer = setInterval(() => { if (state.status.tracking) loadStatus(); }, 4000);
+  }
+
+  // ---------- rendering ----------
+
+  function render() {
+    document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === state.tab));
+    $('view').innerHTML = state.tab === 'trips' ? tripsView() : settingsView();
+    renderChrome();
+  }
+
+  function renderChrome() {
+    const s = state.status;
+    const fab = $('fab');
+    fab.hidden = state.tab !== 'trips';
+    fab.classList.toggle('recording', !!s.tracking);
+    fab.textContent = s.tracking ? `Stop · ${mi(s.miles)} mi` : 'Start drive';
+    $('liveDot').hidden = !s.tracking;
+  }
+
+  function tripsView() {
+    const r = range(state.period, state.offset);
+    const inRange = state.trips.filter((t) => t.start >= r.s.getTime() && t.start < r.e.getTime());
+    let work = 0, personal = 0, pending = 0;
+    for (const t of inRange) {
+      if (t.type === 'work') work += t.miles;
+      else if (t.type === 'personal') personal += t.miles;
+      else pending++;
+    }
+
+    let html = '';
+    if (isNative && !state.status.auto) {
+      html += `<div class="card banner"><p><strong>Automatic tracking is off</strong>Turn it on and Odo records every drive for you.</p>
+        <button class="btn primary" data-act="goto-settings" type="button">Set up</button></div>`;
+    }
+    if (state.status.dashSupported) {
+      const s = state.status;
+      html += s.dashing
+        ? `<div class="card dash on"><div><strong>Dashing since ${esc(timeFmt.format(s.dashSince))}</strong>
+            <p>Every drive is logged as ${esc(workLabel())}.</p></div>
+            <button class="btn" data-act="dash" data-v="0" type="button">End dash</button></div>`
+        : `<div class="card dash"><div><strong>Not dashing</strong>
+            <p>Start a dash and drives are logged as ${esc(workLabel())} without asking.</p></div>
+            <button class="btn primary" data-act="dash" data-v="1" type="button">Start dash</button></div>`;
+    }
+
+    html += '<div class="period">' + [['week', 'Week'], ['2wk', '2 weeks'], ['month', 'Month'], ['year', 'Year']]
+      .map(([k, l]) => `<button data-act="period" data-k="${k}" class="${state.period === k ? 'on' : ''}" type="button">${l}</button>`)
+      .join('') + '</div>';
+    html += `<div class="range">
+        <button class="arrow" data-act="prev" type="button" aria-label="Previous">‹</button>
+        <h2>${esc(rangeLabel(state.period, r))}</h2>
+        <button class="arrow" data-act="next" type="button" aria-label="Next" ${state.offset >= 0 ? 'disabled' : ''}>›</button>
+      </div>`;
+
+    html += `<div class="card totals">
+        <div class="big">
+          <div><div class="stat-label">Business miles</div><div class="stat-value">${mi(work)}<span class="unit">mi</span></div></div>
+          <div class="deduction"><div class="stat-label">Est. deduction</div><div class="stat-value">${money(work * state.rate)}</div></div>
+        </div>
+        <div><div class="stat-label">Personal</div><div class="stat-value">${mi(personal)}<span class="unit">mi</span></div></div>
+        <div><div class="stat-label">Need a label</div><div class="stat-value">${pending}<span class="unit">${pending === 1 ? 'trip' : 'trips'}</span></div></div>
+      </div>`;
+
+    if (!inRange.length) {
+      html += `<div class="empty"><strong>No trips ${state.offset === 0 ? 'yet' : 'in this period'}</strong>
+        ${state.offset === 0 ? (state.status.auto ? 'Your next drive will show up here.' : 'Tap Start drive, or turn on automatic tracking.') : ''}</div>`;
+      return html;
+    }
+
+    const days = new Map();
+    for (const t of inRange) {
+      const k = startOfDay(t.start).getTime();
+      if (!days.has(k)) days.set(k, []);
+      days.get(k).push(t);
+    }
+    for (const [k, list] of days) {
+      const dayWork = list.filter((t) => t.type === 'work').reduce((a, t) => a + t.miles, 0);
+      html += `<div class="day"><div class="day-head"><span>${esc(dayFmt.format(new Date(k)))}</span>
+        <span>${mi(dayWork)} business mi</span></div>`;
+      html += list.map(tripRow).join('');
+      html += '</div>';
+    }
+    return html;
+  }
+
+  function tripRow(t) {
+    const type = t.type || 'pending';
+    const chip = type === 'work'
+      ? `<span class="chip">${esc(t.purpose || 'Work')}</span>`
+      : type === 'personal' ? '<span class="chip personal">Personal</span>' : '<span class="chip pending">Work or personal?</span>';
+    let quick = '';
+    if (type === 'pending') {
+      const gigs = state.prefs.gigs.length ? state.prefs.gigs : ['Work'];
+      quick = '<div class="quick">' + gigs.slice(0, 3).map((g) =>
+        `<button class="yes" data-act="quick" data-id="${esc(t.id)}" data-purpose="${esc(g)}" type="button">${esc(g)}</button>`
+      ).join('') + `<button data-act="quick" data-id="${esc(t.id)}" data-purpose="" type="button">Personal</button></div>`;
+    }
+    return `<div class="trip ${type === 'pending' ? 'pending' : ''}" data-act="open" data-id="${esc(t.id)}" role="button" tabindex="0">
+        <svg class="thumb ${type}" viewBox="0 0 56 42" aria-hidden="true"><path d="${routeD(t.path, 56, 42, 6)}"/></svg>
+        <div class="trip-main">
+          <div class="trip-time">${esc(timeFmt.format(t.start))} – ${esc(timeFmt.format(t.end))}</div>
+          ${chip}
+        </div>
+        <div class="trip-miles">${mi(t.miles)} mi${type === 'work' ? `<small>${money(t.miles * state.rate)}</small>` : ''}</div>
+        ${quick}
+      </div>`;
+  }
+
+  function settingsView() {
+    const s = state.status;
+    let html = '';
+
+    html += `<div class="section-title">Automatic tracking</div>
+      <div class="card"><div class="row">
+        <div><strong>Record drives automatically</strong><p>Odo notices when you start driving and asks “${esc(state.prefs.prompt)}” when you stop.</p></div>
+        <label class="switch"><input type="checkbox" id="autoToggle" ${s.auto ? 'checked' : ''}/><span></span></label>
+      </div></div>`;
+
+    const ios = s.platform === 'ios';
+    if ((isNative || s.platform) && ios) {
+      const steps = [
+        ['location', 'Location', 'So Odo can measure your miles.', 'Allow'],
+        ['background', 'Location: Always', 'So drives record with Odo closed. iPhone asks “Change to Always Allow?”', 'Allow'],
+        ['precise', 'Precise Location', 'Exact miles instead of rough ones.', 'Open'],
+        ['activity', 'Motion & Fitness', 'Notices when you start driving, using almost no battery.', 'Allow'],
+        ['notifications', 'Notifications', 'For the “' + esc(state.prefs.prompt) + '” question after each drive.', 'Allow'],
+      ];
+      html += '<div class="section-title">Setup</div><div class="card">' + steps.map(([k, title, desc, btn]) => {
+        const ok = !!s[k];
+        const blocked = (k === 'background' || k === 'precise') && !s.location;
+        return `<div class="row"><div class="step"><span class="check ${ok ? 'ok' : 'no'}">${ok ? '✓' : '!'}</span>
+          <div><strong>${title}</strong><p>${desc}</p></div></div>
+          ${ok ? '' : `<button class="btn" data-act="perm" data-k="${k}" type="button" ${blocked ? 'disabled' : ''}>${btn}</button>`}</div>`;
+      }).join('') + '</div>';
+      if (!s.background && s.location) {
+        html += '<p class="note">If iPhone doesn’t ask, tap Allow and choose Location → Always in Settings.</p>';
+      }
+      html += `<div class="section-title">Start dashes from Dasher</div><div class="card">
+        <p class="howto-lead">Set this up once in the Shortcuts app and every drive during your shift is logged as ${esc(workLabel())}:</p>
+        <ol class="howto">
+          <li>Open <strong>Shortcuts</strong>, tap <strong>Automation</strong>, then <strong>+</strong>.</li>
+          <li>Choose <strong>App</strong>, pick <strong>Dasher</strong>, check <strong>Is Opened</strong>, and select <strong>Run Immediately</strong>.</li>
+          <li>Tap <strong>Next</strong>, then <strong>New Blank Automation</strong>.</li>
+          <li>Tap <strong>Add Action</strong>, search for <strong>Odo</strong>, and choose <strong>Start Dash</strong>. Tap <strong>Done</strong>.</li>
+        </ol>
+        <p class="note" style="margin:10px 0 0">A dash ends when you tap End dash, say “End dash in Odo,” or after 12 hours. Drives outside a dash still get the “${esc(state.prefs.prompt)}” question.</p>
+      </div>`;
+    } else if (isNative) {
+      const steps = [
+        ['location', 'Location', 'So Odo can measure your miles.', 'Allow'],
+        ['background', 'Location: Allow all the time', 'So drives record with the app closed.', 'Allow'],
+        ['activity', 'Physical activity', 'Notices when you start driving, using almost no battery.', 'Allow'],
+        ['notifications', 'Notifications', 'For the work-or-personal question after each drive.', 'Allow'],
+        ['batteryUnrestricted', 'Battery: no restrictions', 'Keeps your phone from shutting Odo down mid-shift.', 'Open'],
+      ];
+      html += '<div class="section-title">Setup</div><div class="card">' + steps.map(([k, title, desc, btn]) => {
+        const ok = !!s[k];
+        const blocked = k === 'background' && !s.location;
+        return `<div class="row"><div class="step"><span class="check ${ok ? 'ok' : 'no'}">${ok ? '✓' : '!'}</span>
+          <div><strong>${title}</strong><p>${desc}</p></div></div>
+          ${ok ? '' : `<button class="btn" data-act="perm" data-k="${k}" type="button" ${blocked ? 'disabled' : ''}>${btn}</button>`}</div>`;
+      }).join('') + '</div>';
+      if (!s.batteryUnrestricted) {
+        html += '<p class="note">For battery, find Odo in the list and choose “Unrestricted” or “Don’t optimize.”</p>';
+      }
+    }
+
+    html += `<div class="section-title">Work types</div><div class="card">
+      <div><strong>What do you drive for?</strong><p class="note" style="margin:4px 0 0">Tapping one labels the trip for your tax report. The first two appear as buttons on the notification.</p></div>
+      <div class="gig-list">${state.prefs.gigs.map((g, i) =>
+        `<span class="gig">${esc(g)}<button data-act="del-gig" data-i="${i}" type="button" aria-label="Remove ${esc(g)}">×</button></span>`).join('')
+        || '<span class="note" style="margin:0">None yet. Trips will be labeled “Work.”</span>'}</div>
+      <form class="inline-form" id="gigForm"><input type="text" id="gigInput" maxlength="24" placeholder="Add, e.g. Uber Eats" />
+        <button class="btn primary" type="submit">Add</button></form>
+    </div>`;
+
+    html += `<div class="section-title">Notification question</div><div class="card">
+      <input type="text" id="promptInput" maxlength="40" value="${esc(state.prefs.prompt)}" />
+      <p class="note" style="margin:8px 0 0">Shown after each drive with Yes and No buttons.</p></div>`;
+
+    html += `<div class="section-title">Mileage rate</div><div class="card"><div class="row">
+      <div><strong>Cents per business mile</strong><p>The 2026 IRS business rate is 72.5¢.</p></div>
+      <input type="number" id="rateInput" step="0.5" min="0" max="200" value="${Math.round(state.rate * 1000) / 10}" style="width:96px;text-align:right" />
+    </div></div>`;
+
+    html += `<p class="note">Odo test build 0.2. Your trips stay on this phone.</p>`;
+    if (!isNative) html += '<p class="dev-note">Browser preview: sample trips, no GPS.</p>';
+    return html;
+  }
+
+  // ---------- trip sheet ----------
+
+  function openTrip(id) {
+    state.openTripId = id;
+    state.otherPurpose = false;
+    $('sheetBack').hidden = false;
+    $('sheet').hidden = false;
+    renderSheet(true);
+  }
+
+  function closeSheet() {
+    state.openTripId = null;
+    if (leafletMap) { leafletMap.remove(); leafletMap = null; }
+    $('sheetBack').hidden = true;
+    $('sheet').hidden = true;
+  }
+
+  function renderSheet(drawMap) {
+    const t = state.trips.find((x) => x.id === state.openTripId);
+    if (!t) { closeSheet(); return; }
+    const type = t.type || 'pending';
+    const gigs = state.prefs.gigs;
+    const purpose = t.purpose || '';
+    const custom = state.otherPurpose || (purpose && !gigs.includes(purpose));
+
+    const sheet = $('sheet');
+    const keepMap = !drawMap && sheet.querySelector('#map');
+    const mapHtml = keepMap ? '' : '<div class="map" id="map"></div>';
+
+    const options = gigs.map((g) => `<option value="${esc(g)}" ${!custom && purpose === g ? 'selected' : ''}>${esc(g)}</option>`).join('');
+    const purposeField = type !== 'work' ? '' : `<div class="field"><label for="purposeSel">Purpose</label>
+        <select id="purposeSel">${options}${gigs.length ? '' : `<option value="Work" ${purpose === 'Work' || !purpose ? 'selected' : ''}>Work</option>`}
+          <option value="__other" ${custom ? 'selected' : ''}>Other…</option></select>
+        ${custom ? `<input type="text" id="purposeText" maxlength="40" placeholder="e.g. Supply run" value="${esc(gigs.includes(purpose) ? '' : purpose)}" style="margin-top:8px" />` : ''}
+      </div>`;
+
+    const body = `<h3>${mi(t.miles)} mi${type === 'work' ? ` <span style="color:var(--accent);font-size:17px">· ${money(t.miles * state.rate)}</span>` : ''}</h3>
+      <div class="sub">${esc(dayFmt.format(t.start))} · ${esc(timeFmt.format(t.start))} – ${esc(timeFmt.format(t.end))} · ${duration(t.end - t.start)}${t.manual ? ' · started by hand' : ''}</div>
+      <div class="seg">
+        <button class="${type === 'work' ? 'on work' : ''}" data-act="type" data-v="work" type="button">Work</button>
+        <button class="${type === 'personal' ? 'on' : ''}" data-act="type" data-v="personal" type="button">Personal</button>
+      </div>
+      ${purposeField}
+      <div class="sheet-actions">
+        <button class="btn danger" data-act="delete" type="button">Delete</button>
+        <button class="btn primary" data-act="close" type="button">Done</button>
+      </div>`;
+
+    if (keepMap) {
+      sheet.querySelector('#sheetBody').innerHTML = body;
+    } else {
+      sheet.innerHTML = `<div class="grip"></div>${mapHtml}<div id="sheetBody">${body}</div>`;
+      drawRoute(t);
+    }
+  }
+
+  function drawRoute(t) {
+    const el = $('map');
+    const path = t.path || [];
+    if (leafletMap) { leafletMap.remove(); leafletMap = null; }
+    if (window.L && navigator.onLine && path.length > 1) {
+      try {
+        leafletMap = L.map(el, { zoomControl: false, attributionControl: true });
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19, attribution: '© OpenStreetMap',
+        }).addTo(leafletMap);
+        const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#1f8a5b';
+        const line = L.polyline(path, { color: accent, weight: 5, opacity: 0.9 }).addTo(leafletMap);
+        L.circleMarker(path[0], { radius: 6, color: accent, fillColor: '#fff', fillOpacity: 1, weight: 3 }).addTo(leafletMap);
+        L.circleMarker(path[path.length - 1], { radius: 6, color: accent, fillColor: accent, fillOpacity: 1, weight: 3 }).addTo(leafletMap);
+        leafletMap.fitBounds(line.getBounds(), { padding: [24, 24] });
+        setTimeout(() => leafletMap && leafletMap.invalidateSize(), 60);
+        return;
+      } catch (e) { /* fall back to outline */ }
+    }
+    el.innerHTML = `<svg viewBox="0 0 320 220" preserveAspectRatio="xMidYMid meet"><path d="${routeD(path, 320, 220, 24)}"/></svg>`;
+  }
+
+  // ---------- events ----------
+
+  document.addEventListener('click', async (ev) => {
+    const tab = ev.target.closest('.tabs button');
+    if (tab) { state.tab = tab.dataset.tab; render(); window.scrollTo(0, 0); return; }
+
+    const el = ev.target.closest('[data-act]');
+    if (!el) return;
+    const act = el.dataset.act;
+    const id = el.dataset.id;
+
+    if (act === 'period') { state.period = el.dataset.k; state.offset = 0; safeSet(PERIOD_KEY, state.period); render(); }
+    else if (act === 'prev') { state.offset--; render(); }
+    else if (act === 'next') { if (state.offset < 0) state.offset++; render(); }
+    else if (act === 'goto-settings') { state.tab = 'settings'; render(); window.scrollTo(0, 0); }
+    else if (act === 'quick') {
+      ev.stopPropagation();
+      const p = el.dataset.purpose;
+      setTrip(id, p ? { type: 'work', purpose: p } : { type: 'personal', purpose: '' });
+    }
+    else if (act === 'open') openTrip(id);
+    else if (act === 'type') {
+      const v = el.dataset.v;
+      const t = state.trips.find((x) => x.id === state.openTripId);
+      setTrip(state.openTripId, v === 'work'
+        ? { type: 'work', purpose: (t && t.purpose) || workLabel() }
+        : { type: 'personal', purpose: '' });
+    }
+    else if (act === 'delete') {
+      const tid = state.openTripId;
+      if (!confirm('Delete this trip?')) return;
+      closeSheet();
+      state.trips = state.trips.filter((x) => x.id !== tid);
+      render();
+      try { await Tracker.deleteTrip({ id: tid }); } catch (e) { toast('Could not delete'); }
+    }
+    else if (act === 'close') closeSheet();
+    else if (act === 'perm') {
+      const k = el.dataset.k;
+      const ios = state.status.platform === 'ios';
+      if (k === 'batteryUnrestricted') {
+        await Tracker.openBatterySettings();
+      } else if (k === 'precise') {
+        toast('Tap Location, then turn on Precise Location', 5000);
+        await Tracker.openAppSettings();
+      } else if (k === 'background') {
+        toast(ios ? 'Choose “Change to Always Allow”' : 'Choose “Allow all the time”');
+        const ok = await request('background');
+        if (!ok && (ios || state.status.sdk >= 30)) {
+          if (ios) toast('Tap Location, then choose Always', 5000);
+          await Tracker.openAppSettings();
+        }
+      } else {
+        const ok = await request(k);
+        if (!ok) { toast('Turn it on in Odo’s app settings'); await Tracker.openAppSettings(); }
+      }
+      if (state.status.auto) Tracker.setAuto({ enabled: true }).catch(() => {});
+    }
+    else if (act === 'dash') {
+      try { state.status = await Tracker.setDash({ enabled: el.dataset.v === '1' }); } catch (e) { toast('Could not change the dash'); }
+      render();
+      if (state.status.dashing) toast(`Dash started. Drives are logged as ${workLabel()}.`);
+    }
+    else if (act === 'del-gig') {
+      state.prefs.gigs.splice(Number(el.dataset.i), 1);
+      render();
+      savePrefs();
+    }
+  });
+
+  document.addEventListener('keydown', (ev) => {
+    if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches('.trip[data-act=open]')) {
+      ev.preventDefault();
+      openTrip(ev.target.dataset.id);
+    }
+    if (ev.key === 'Escape' && state.openTripId) closeSheet();
+  });
+
+  document.addEventListener('change', (ev) => {
+    const t = ev.target;
+    if (t.id === 'autoToggle') toggleAuto(t.checked);
+    else if (t.id === 'rateInput') {
+      const c = parseFloat(t.value);
+      if (c >= 0) { state.rate = c / 100; safeSet(RATE_KEY, String(state.rate)); toast('Rate saved'); }
+    } else if (t.id === 'promptInput') {
+      const v = t.value.trim();
+      if (v) { state.prefs.prompt = v; savePrefs(); toast('Saved'); }
+    } else if (t.id === 'purposeSel') {
+      if (t.value === '__other') { state.otherPurpose = true; renderSheet(); const i = $('purposeText'); if (i) i.focus(); }
+      else { state.otherPurpose = false; setTrip(state.openTripId, { purpose: t.value }); }
+    } else if (t.id === 'purposeText') {
+      const v = t.value.trim();
+      if (v) setTrip(state.openTripId, { purpose: v });
+    }
+  });
+
+  document.addEventListener('submit', (ev) => {
+    if (ev.target.id !== 'gigForm') return;
+    ev.preventDefault();
+    const v = $('gigInput').value.trim();
+    if (!v) return;
+    if (state.prefs.gigs.some((g) => g.toLowerCase() === v.toLowerCase())) { toast('Already added'); return; }
+    if (state.prefs.gigs.length >= 6) { toast('Up to 6 work types'); return; }
+    state.prefs.gigs.push(v);
+    render();
+    savePrefs();
+  });
+
+  $('fab').addEventListener('click', onFab);
+  $('sheetBack').addEventListener('click', closeSheet);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { loadStatus().then(() => state.tab === 'settings' && render()); loadTrips(); }
+  });
+
+  // ---------- start ----------
+
+  (async function init() {
+    try {
+      Tracker.addListener('tripsChanged', () => loadTrips());
+      Tracker.addListener('trackingChanged', (s) => { state.status = s; renderChrome(); });
+    } catch (e) { /* listeners are a bonus; polling covers it */ }
+    await loadPrefs();
+    await loadStatus();
+    await loadTrips();
+    startPolling();
+  })();
+
+  // ---------- browser preview (sample data) ----------
+
+  function makeMock() {
+    const listeners = {};
+    const emit = (ev, data) => (listeners[ev] || []).forEach((fn) => fn(data));
+    let seed = 7;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+
+    function samplePath(lat, lng, miles) {
+      const pts = [[lat, lng]];
+      let heading = rnd() * Math.PI * 2;
+      const steps = Math.max(6, Math.round(miles * 6));
+      const stepDeg = (miles * 1.609 / steps) / 111;
+      for (let i = 0; i < steps; i++) {
+        if (rnd() < 0.3) heading += (rnd() < 0.5 ? 1 : -1) * Math.PI / 2;
+        lat += Math.cos(heading) * stepDeg;
+        lng += Math.sin(heading) * stepDeg / Math.cos(lat * Math.PI / 180);
+        pts.push([+lat.toFixed(5), +lng.toFixed(5)]);
+      }
+      return pts;
+    }
+
+    function sampleTrips() {
+      const out = [];
+      const today = startOfDay(Date.now()).getTime();
+      for (let d = 34; d >= 0; d--) {
+        const n = rnd() < 0.25 ? 0 : 1 + Math.floor(rnd() * 4);
+        let t = today - d * 86400000 + (16 + rnd() * 2) * 3600000;
+        for (let i = 0; i < n; i++) {
+          const miles = Math.round((1 + rnd() * 8) * 100) / 100;
+          const dur = (miles * 2.4 + rnd() * 6) * 60000;
+          if (t + dur > Date.now()) break;
+          const type = rnd() < 0.85 ? 'work' : 'personal';
+          out.push({
+            id: 'm' + d + '-' + i, start: t, end: t + dur, miles, type,
+            purpose: type === 'work' ? (rnd() < 0.7 ? 'DoorDash' : 'Uber Eats') : '',
+            manual: false, path: samplePath(41.88 + rnd() * 0.05, -87.65 + rnd() * 0.05, miles),
+          });
+          t += dur + (8 + rnd() * 25) * 60000;
+        }
+      }
+      // The two most recent drives haven't been answered yet.
+      out.slice(-2).forEach((t) => { t.type = 'pending'; t.purpose = ''; });
+      return out;
+    }
+
+    let trips = sampleTrips();
+    const prefs = { gigs: ['DoorDash', 'Uber Eats'], prompt: 'Are you dashing?' };
+    const status = { location: true, background: false, activity: false, notifications: true,
+      batteryUnrestricted: false, auto: false, tracking: false, manual: false, miles: 0, tripStart: 0, sdk: 34 };
+    // Preview the iPhone screens with index.html?ios
+    if (/[?&]ios\b/.test(location.search)) {
+      Object.assign(status, { platform: 'ios', precise: false, batteryUnrestricted: true,
+        dashSupported: true, dashing: false, dashSince: 0 });
+    }
+    let timer = null;
+    const snap = () => Object.assign({}, status);
+
+    return {
+      async getStatus() { return snap(); },
+      async requestPerm({ alias }) { status[alias] = true; return snap(); },
+      async openAppSettings() {},
+      async openBatterySettings() { status.batteryUnrestricted = true; },
+      async setAuto({ enabled }) { status.auto = enabled; return snap(); },
+      async setDash({ enabled }) { status.dashing = enabled; status.dashSince = enabled ? Date.now() : 0; return snap(); },
+      async startManual() {
+        Object.assign(status, { tracking: true, manual: true, miles: 0, tripStart: Date.now() });
+        timer = setInterval(() => { status.miles += 0.05; emit('trackingChanged', snap()); }, 1000);
+        return snap();
+      },
+      async stopTrip() {
+        clearInterval(timer);
+        const miles = Math.max(0.1, Math.round(status.miles * 100) / 100);
+        trips.push({ id: 'm' + Date.now(), start: status.tripStart, end: Date.now(), miles, type: 'pending',
+          purpose: '', manual: true, path: samplePath(41.9, -87.63, miles) });
+        Object.assign(status, { tracking: false, manual: false, miles: 0 });
+        emit('trackingChanged', snap());
+        emit('tripsChanged', {});
+      },
+      async getTrips() { return { trips: trips.slice() }; },
+      async updateTrip({ id, type, purpose }) {
+        const t = trips.find((x) => x.id === id);
+        if (t) { if (type != null) t.type = type; if (purpose != null) t.purpose = purpose; }
+        return { ok: !!t };
+      },
+      async deleteTrip({ id }) { trips = trips.filter((x) => x.id !== id); return { ok: true }; },
+      async getPrefs() { return { gigs: prefs.gigs.slice(), prompt: prefs.prompt }; },
+      async setPrefs(p) { if (p.gigs) prefs.gigs = p.gigs.slice(); if (p.prompt) prefs.prompt = p.prompt; },
+      addListener(ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); return Promise.resolve({ remove() {} }); },
+    };
+  }
+})();

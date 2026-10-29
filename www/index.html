@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Odo</title>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo" aria-hidden="true"></span>Odo</div>
+    <div id="liveDot" class="live" hidden>Recording</div>
+  </header>
+
+  <main id="view"></main>
+
+  <button id="fab" class="fab" type="button"></button>
+
+  <nav class="tabs">
+    <button data-tab="trips" class="active" type="button">Trips</button>
+    <button data-tab="settings" type="button">Settings</button>
+  </nav>
+
+  <div id="sheetBack" class="sheet-back" hidden></div>
+  <section id="sheet" class="sheet" hidden aria-modal="true" role="dialog"></section>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

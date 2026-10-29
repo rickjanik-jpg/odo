@@ -1,0 +1,9 @@
+{
+  "appId": "com.odomiles.app",
+  "appName": "Odo",
+  "webDir": "www",
+  "ios": {
+    "handleApplicationNotifications": false,
+    "contentInset": "never"
+  }
+}
