@@ -1,13 +1,13 @@
 import Foundation
 import AppIntents
 
-/// "Start Dash" and "End Dash" actions for the Shortcuts app and Siri.
-/// Set up a Shortcuts automation, "When Dasher is opened → Start Dash", and every drive during your
-/// shift is logged as work. These run in the background without opening Odo.
+/// "Start Shift" and "End Shift" actions for the Shortcuts app and Siri.
+/// Set up a Shortcuts automation, "When Dasher is opened → Start Shift", and every drive during your
+/// shift is logged as work. (Type names keep "Dash" so existing automations keep working.) These run in the background without opening Odo.
 
 @available(iOS 16.0, *)
 struct StartDashIntent: AppIntent {
-    static let title: LocalizedStringResource = "Start Dash"
+    static let title: LocalizedStringResource = "Start Shift"
     static let openAppWhenRun: Bool = false
 
     @MainActor
@@ -20,7 +20,7 @@ struct StartDashIntent: AppIntent {
 
 @available(iOS 16.0, *)
 struct EndDashIntent: AppIntent {
-    static let title: LocalizedStringResource = "End Dash"
+    static let title: LocalizedStringResource = "End Shift"
     static let openAppWhenRun: Bool = false
 
     @MainActor
@@ -35,12 +35,12 @@ struct EndDashIntent: AppIntent {
 struct OdoShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(intent: StartDashIntent(), phrases: [
+            "Start shift in \(.applicationName)",
             "Start dash in \(.applicationName)",
-            "Start dashing with \(.applicationName)",
         ])
         AppShortcut(intent: EndDashIntent(), phrases: [
+            "End shift in \(.applicationName)",
             "End dash in \(.applicationName)",
-            "Stop dashing with \(.applicationName)",
         ])
     }
 }

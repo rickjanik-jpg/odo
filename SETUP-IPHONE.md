@@ -9,11 +9,11 @@ spread over a day or two while Apple approves your account.
 - **Automatic drive detection.** iPhone wakes Odo when you drive away (motion sensors plus
   low-power location). Odo records the trip with GPS even with the screen off or Dasher open.
 - **No lost start miles.** Each trip starts from the spot where you last parked.
-- **"Are you dashing?" notification** when a drive ends, with a button for each work type and No.
+- **"Was this drive for work?" notification** when a drive ends, with Work and Personal buttons (or one button per work label you add, like DoorDash).
   Long-press or swipe down on it to see the buttons.
-- **Dash mode.** Tap **Start dash** (or let the Dasher shortcut do it) and every drive is logged
-  as DoorDash without asking. It ends when you tap End dash, say "End dash in Odo", or after 12 hours.
-- **Start Dash / End Dash actions** in the Shortcuts app and Siri.
+- **Shifts.** Tap **Start shift** (or let a Shortcuts automation do it when you open Dasher) and every drive is logged
+  as DoorDash without asking. It ends when you tap End shift, say "End shift in Odo", or after 12 hours.
+- **Start Shift / End Shift actions** in the Shortcuts app and Siri.
 - The same trip list, totals, deduction and trip editing as the Android version.
 - Everything stays on the phone.
 
@@ -107,9 +107,9 @@ Then turn on **Record drives automatically** and check your work types.
 **Set up the Dasher shortcut** (instructions are also in Odo's Settings):
 1. Open **Shortcuts** → **Automation** → **+**.
 2. Choose **App**, pick **Dasher**, check **Is Opened**, select **Run Immediately**.
-3. Tap **Next** → **New Blank Automation** → **Add Action**, search **Odo**, choose **Start Dash**, tap **Done**.
+3. Tap **Next** → **New Blank Automation** → **Add Action**, search **Odo**, choose **Start Shift**, tap **Done**.
 
-If the Start Dash action doesn't show up yet, open Odo once, then try again.
+If the Start Shift action doesn't show up yet, open Odo once, then try again.
 
 ## Testing tips
 

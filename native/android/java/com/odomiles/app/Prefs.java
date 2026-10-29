@@ -28,7 +28,7 @@ final class Prefs {
     }
 
     static String prompt(Context c) {
-        return sp(c).getString("prompt", "Are you dashing?");
+        return sp(c).getString("prompt", "Was this drive for work?");
     }
 
     static void setPrompt(Context c, String prompt) {
@@ -38,19 +38,18 @@ final class Prefs {
     static List<String> gigs(Context c) {
         List<String> out = new ArrayList<>();
         try {
-            JSONArray a = new JSONArray(sp(c).getString("gigs", "[\"DoorDash\"]"));
+            JSONArray a = new JSONArray(sp(c).getString("gigs", "[]"));
             for (int i = 0; i < a.length(); i++) {
                 String g = a.optString(i, "").trim();
                 if (!g.isEmpty()) out.add(g);
             }
         } catch (Exception ignored) {
-            out.add("DoorDash");
         }
         return out;
     }
 
     static String gigsJson(Context c) {
-        return sp(c).getString("gigs", "[\"DoorDash\"]");
+        return sp(c).getString("gigs", "[]");
     }
 
     static void setGigs(Context c, String json) {

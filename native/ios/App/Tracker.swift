@@ -17,7 +17,7 @@ extension Notification.Name {
 /// - On waking, Odo checks for up to 3 minutes whether you're driving (motion sensors, or GPS speed).
 /// - If so, it records the trip with GPS, starting from where you parked so the first stretch counts.
 /// - The trip ends once the motion sensors say you've stopped driving and you've been still for 2 minutes
-///   (or after 5 minutes without movement). Then Odo asks "Are you dashing?".
+///   (or after 5 minutes without movement). Then Odo asks "Was this drive for work?".
 final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCenterDelegate {
     static let shared = Tracker()
 
@@ -570,13 +570,13 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
         let gigs = Array(Prefs.gigs.prefix(3))
         var actions: [UNNotificationAction] = []
         if gigs.count <= 1 {
-            actions.append(UNNotificationAction(identifier: "work.0", title: "Yes", options: []))
+            actions.append(UNNotificationAction(identifier: "work.0", title: gigs.first ?? "Work", options: []))
         } else {
             for (i, g) in gigs.enumerated() {
                 actions.append(UNNotificationAction(identifier: "work.\(i)", title: g, options: []))
             }
         }
-        actions.append(UNNotificationAction(identifier: "personal", title: "No", options: []))
+        actions.append(UNNotificationAction(identifier: "personal", title: "Personal", options: []))
         let ask = UNNotificationCategory(identifier: "odo.ask", actions: actions, intentIdentifiers: [], options: [])
         let dash = UNNotificationCategory(
             identifier: "odo.dash",

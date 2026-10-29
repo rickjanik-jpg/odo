@@ -207,8 +207,8 @@ input[type=text], input[type=number], select {
 }
 .grip { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 0 auto 12px; }
 .map { height: 220px; border-radius: 14px; overflow: hidden; background: var(--bg); }
-.map svg { width: 100%; height: 100%; }
-.map svg path { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.map svg.outline { width: 100%; height: 100%; }
+.map svg.outline path { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .sheet h3 { margin: 14px 0 2px; font-size: 22px; }
 .sheet .sub { color: var(--muted); font-size: 14px; }
 .seg { display: flex; background: var(--bg); border-radius: 12px; padding: 4px; margin-top: 14px; }
@@ -235,3 +235,35 @@ input[type=text], input[type=number], select {
 .howto-lead { margin: 0; font-size: 14px; }
 .howto { margin: 10px 0 0; padding-left: 20px; font-size: 14px; line-height: 1.5; }
 .howto li { margin-bottom: 4px; }
+
+/* Welcome screen */
+body.welcoming .tabs, body.welcoming .fab { display: none !important; }
+body.welcoming { padding-bottom: var(--safe-b); }
+.welcome { text-align: center; padding: 28px 8px 32px; max-width: 420px; margin: 0 auto; }
+.welcome-logo {
+  width: 72px; height: 72px; border-radius: 20px; background: var(--accent); margin: 8px auto 20px; position: relative;
+}
+.welcome-logo::after {
+  content: ""; position: absolute; left: 15px; right: 15px; top: 20px; height: 38px;
+  border: 7px solid var(--accent-ink); border-bottom: none; border-radius: 38px 38px 0 0;
+}
+.welcome h1 { font-size: 28px; line-height: 1.15; letter-spacing: -.02em; margin: 0 0 10px; }
+.welcome-lead { font-size: 17px; color: var(--muted); margin: 0 0 22px; }
+.welcome-lead strong { color: var(--ink); }
+.welcome-demo {
+  text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+  box-shadow: var(--shadow); padding: 14px 14px 12px; margin: 0 auto 22px; max-width: 320px;
+}
+.demo-title { font-weight: 700; font-size: 15px; }
+.demo-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.demo-btns { display: flex; gap: 8px; margin-top: 12px; }
+.demo-btns span {
+  flex: 1; text-align: center; padding: 8px; border-radius: 10px; font-weight: 600; font-size: 14px;
+  background: var(--bg); border: 1px solid var(--line);
+}
+.demo-btns span:first-child { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.welcome-points { list-style: none; padding: 0; margin: 0 0 26px; font-size: 15px; }
+.welcome-points li { padding: 6px 0; }
+.welcome-points li::before { content: "✓"; color: var(--accent); font-weight: 800; margin-right: 8px; }
+.welcome-go { width: 100%; padding: 15px; font-size: 17px; border-radius: 14px; }
+.welcome-note { margin: 14px 4px 0; }

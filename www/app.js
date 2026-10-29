@@ -18,7 +18,8 @@
     tab: 'trips',
     trips: [],
     status: {},
-    prefs: { gigs: ['DoorDash'], prompt: 'Are you dashing?' },
+    prefs: { gigs: [], prompt: 'Was this drive for work?' },
+    welcomed: safeGet('odo.welcomed') === '1',
     period: safeGet(PERIOD_KEY) || 'week',
     offset: 0,
     rate: parseFloat(safeGet(RATE_KEY)) || DEFAULT_RATE,
@@ -151,7 +152,7 @@
   async function loadPrefs() {
     try {
       const p = await Tracker.getPrefs();
-      state.prefs = { gigs: p.gigs || [], prompt: p.prompt || 'Are you dashing?' };
+      state.prefs = { gigs: p.gigs || [], prompt: p.prompt || 'Was this drive for work?' };
     } catch (e) { /* defaults */ }
   }
 
@@ -204,10 +205,11 @@
   }
 
   async function toggleAuto(on) {
-    if (on && isNative && !(await ensureAutoPerms())) { render(); return; }
-    try { state.status = await Tracker.setAuto({ enabled: on }); } catch (e) { toast('Could not change that setting'); }
+    if (on && isNative && !(await ensureAutoPerms())) { render(); return false; }
+    try { state.status = await Tracker.setAuto({ enabled: on }); } catch (e) { toast('Could not change that setting'); return false; }
     render();
     if (on) toast('Automatic tracking is on. Just drive.');
+    return true;
   }
 
   // ---------- start / stop ----------
@@ -238,10 +240,38 @@
 
   // ---------- rendering ----------
 
+  function showWelcome() {
+    return !state.welcomed && !state.status.auto && state.trips.length === 0;
+  }
+
   function render() {
+    const welcome = showWelcome();
+    document.body.classList.toggle('welcoming', welcome);
     document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === state.tab));
-    $('view').innerHTML = state.tab === 'trips' ? tripsView() : settingsView();
+    $('view').innerHTML = welcome ? welcomeView() : state.tab === 'trips' ? tripsView() : settingsView();
     renderChrome();
+  }
+
+  function welcomeView() {
+    const ios = state.status.platform === 'ios' || PLATFORM === 'ios';
+    const always = ios ? '“Change to Always Allow”' : '“Allow all the time”';
+    return `<section class="welcome">
+        <div class="welcome-logo" aria-hidden="true"></div>
+        <h1>Odo logs your miles automatically.</h1>
+        <p class="welcome-lead">After each drive, just tap <strong>Work</strong> or <strong>Personal</strong>.</p>
+        <div class="welcome-demo" aria-hidden="true">
+          <div class="demo-title">${esc(state.prefs.prompt)}</div>
+          <div class="demo-sub">12.4 mi · 4:02 – 4:31 PM</div>
+          <div class="demo-btns"><span>Work</span><span>Personal</span></div>
+        </div>
+        <ul class="welcome-points">
+          <li>Free automatic tracking. No subscription.</li>
+          <li>Your trips stay on your phone.</li>
+          <li>Totals and your tax deduction add up on their own.</li>
+        </ul>
+        <button class="btn primary welcome-go" data-act="welcome" type="button">Get started</button>
+        ${isNative ? `<p class="note welcome-note">Next, your phone asks for location. Choose ${always} so drives record with Odo closed.</p>` : ''}
+      </section>`;
   }
 
   function renderChrome() {
@@ -271,12 +301,12 @@
     if (state.status.dashSupported) {
       const s = state.status;
       html += s.dashing
-        ? `<div class="card dash on"><div><strong>Dashing since ${esc(timeFmt.format(s.dashSince))}</strong>
+        ? `<div class="card dash on"><div><strong>On shift since ${esc(timeFmt.format(s.dashSince))}</strong>
             <p>Every drive is logged as ${esc(workLabel())}.</p></div>
-            <button class="btn" data-act="dash" data-v="0" type="button">End dash</button></div>`
-        : `<div class="card dash"><div><strong>Not dashing</strong>
-            <p>Start a dash and drives are logged as ${esc(workLabel())} without asking.</p></div>
-            <button class="btn primary" data-act="dash" data-v="1" type="button">Start dash</button></div>`;
+            <button class="btn" data-act="dash" data-v="0" type="button">End shift</button></div>`
+        : `<div class="card dash"><div><strong>Off shift</strong>
+            <p>Start a shift and drives are logged as ${esc(workLabel())} without asking.</p></div>
+            <button class="btn primary" data-act="dash" data-v="1" type="button">Start shift</button></div>`;
     }
 
     html += '<div class="period">' + [['week', 'Week'], ['2wk', '2 weeks'], ['month', 'Month'], ['year', 'Year']]
@@ -375,15 +405,15 @@
       if (!s.background && s.location) {
         html += '<p class="note">If iPhone doesn’t ask, tap Allow and choose Location → Always in Settings.</p>';
       }
-      html += `<div class="section-title">Start dashes from Dasher</div><div class="card">
-        <p class="howto-lead">Set this up once in the Shortcuts app and every drive during your shift is logged as ${esc(workLabel())}:</p>
+      html += `<div class="section-title">Start shifts from a work app</div><div class="card">
+        <p class="howto-lead">Set this up once in the Shortcuts app and opening your work app (Dasher, Uber Driver, a CRM…) starts a shift. Every drive during it is logged as ${esc(workLabel())}:</p>
         <ol class="howto">
           <li>Open <strong>Shortcuts</strong>, tap <strong>Automation</strong>, then <strong>+</strong>.</li>
-          <li>Choose <strong>App</strong>, pick <strong>Dasher</strong>, check <strong>Is Opened</strong>, and select <strong>Run Immediately</strong>.</li>
+          <li>Choose <strong>App</strong>, pick your work app (for example <strong>Dasher</strong>), check <strong>Is Opened</strong>, and select <strong>Run Immediately</strong>.</li>
           <li>Tap <strong>Next</strong>, then <strong>New Blank Automation</strong>.</li>
-          <li>Tap <strong>Add Action</strong>, search for <strong>Odo</strong>, and choose <strong>Start Dash</strong>. Tap <strong>Done</strong>.</li>
+          <li>Tap <strong>Add Action</strong>, search for <strong>Odo</strong>, and choose <strong>Start Shift</strong>. Tap <strong>Done</strong>.</li>
         </ol>
-        <p class="note" style="margin:10px 0 0">A dash ends when you tap End dash, say “End dash in Odo,” or after 12 hours. Drives outside a dash still get the “${esc(state.prefs.prompt)}” question.</p>
+        <p class="note" style="margin:10px 0 0">A shift ends when you tap End shift, say “End shift in Odo,” or after 12 hours. Drives outside a shift still get the “${esc(state.prefs.prompt)}” question.</p>
       </div>`;
     } else if (isNative) {
       const steps = [
@@ -405,18 +435,18 @@
       }
     }
 
-    html += `<div class="section-title">Work types</div><div class="card">
-      <div><strong>What do you drive for?</strong><p class="note" style="margin:4px 0 0">Tapping one labels the trip for your tax report. The first two appear as buttons on the notification.</p></div>
+    html += `<div class="section-title">Work labels (optional)</div><div class="card">
+      <div><strong>Name your work</strong><p class="note" style="margin:4px 0 0">Add names like DoorDash, Showings or Client visits and they replace the Work button. Leave it empty to just use Work.</p></div>
       <div class="gig-list">${state.prefs.gigs.map((g, i) =>
         `<span class="gig">${esc(g)}<button data-act="del-gig" data-i="${i}" type="button" aria-label="Remove ${esc(g)}">×</button></span>`).join('')
-        || '<span class="note" style="margin:0">None yet. Trips will be labeled “Work.”</span>'}</div>
-      <form class="inline-form" id="gigForm"><input type="text" id="gigInput" maxlength="24" placeholder="Add, e.g. Uber Eats" />
+        || '<span class="note" style="margin:0">None. Trips are labeled “Work.”</span>'}</div>
+      <form class="inline-form" id="gigForm"><input type="text" id="gigInput" maxlength="24" placeholder="Add, e.g. DoorDash" />
         <button class="btn primary" type="submit">Add</button></form>
     </div>`;
 
-    html += `<div class="section-title">Notification question</div><div class="card">
+    html += `<div class="section-title">Question after each drive</div><div class="card">
       <input type="text" id="promptInput" maxlength="40" value="${esc(state.prefs.prompt)}" />
-      <p class="note" style="margin:8px 0 0">Shown after each drive with Yes and No buttons.</p></div>`;
+      <p class="note" style="margin:8px 0 0">Shown after each drive with Work and Personal buttons.</p></div>`;
 
     html += `<div class="section-title">Mileage rate</div><div class="card"><div class="row">
       <div><strong>Cents per business mile</strong><p>The 2026 IRS business rate is 72.5¢.</p></div>
@@ -503,7 +533,7 @@
         return;
       } catch (e) { /* fall back to outline */ }
     }
-    el.innerHTML = `<svg viewBox="0 0 320 220" preserveAspectRatio="xMidYMid meet"><path d="${routeD(path, 320, 220, 24)}"/></svg>`;
+    el.innerHTML = `<svg class="outline" viewBox="0 0 320 220" preserveAspectRatio="xMidYMid meet"><path d="${routeD(path, 320, 220, 24)}"/></svg>`;
   }
 
   // ---------- events ----------
@@ -564,10 +594,21 @@
       }
       if (state.status.auto) Tracker.setAuto({ enabled: true }).catch(() => {});
     }
-    else if (act === 'dash') {
-      try { state.status = await Tracker.setDash({ enabled: el.dataset.v === '1' }); } catch (e) { toast('Could not change the dash'); }
+    else if (act === 'welcome') {
+      state.welcomed = true;
+      safeSet('odo.welcomed', '1');
+      if (isNative) {
+        el.disabled = true;
+        const ok = await toggleAuto(true);
+        if (!ok) { state.tab = 'settings'; toast('Finish the setup steps to record drives automatically', 4500); }
+      }
       render();
-      if (state.status.dashing) toast(`Dash started. Drives are logged as ${workLabel()}.`);
+      window.scrollTo(0, 0);
+    }
+    else if (act === 'dash') {
+      try { state.status = await Tracker.setDash({ enabled: el.dataset.v === '1' }); } catch (e) { toast('Could not change the shift'); }
+      render();
+      if (state.status.dashing) toast(`Shift started. Drives are logged as ${workLabel()}.`);
     }
     else if (act === 'del-gig') {
       state.prefs.gigs.splice(Number(el.dataset.i), 1);
@@ -687,8 +728,8 @@
       return out;
     }
 
-    let trips = sampleTrips();
-    const prefs = { gigs: ['DoorDash', 'Uber Eats'], prompt: 'Are you dashing?' };
+    let trips = /[?&]new\b/.test(location.search) ? [] : sampleTrips();
+    const prefs = { gigs: [], prompt: 'Was this drive for work?' };
     const status = { location: true, background: false, activity: false, notifications: true,
       batteryUnrestricted: false, auto: false, tracking: false, manual: false, miles: 0, tripStart: 0, sdk: 34 };
     // Preview the iPhone screens with index.html?ios

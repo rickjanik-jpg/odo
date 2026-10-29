@@ -72,7 +72,7 @@ final class Notifs {
                 .build();
     }
 
-    /** "Are you dashing?" with Yes / No, or one button per gig. */
+    /** "Was this drive for work?" with Work / Personal, or one button per work label. */
     static void promptTrip(Context c, JSONObject trip) {
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(c,
                 Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -98,14 +98,14 @@ final class Notifs {
         List<String> gigs = Prefs.gigs(c);
         if (gigs.size() <= 1) {
             String g = gigs.isEmpty() ? "Work" : gigs.get(0);
-            b.addAction(0, "Yes", action(c, id, nid, 1, "work", g));
+            b.addAction(0, g, action(c, id, nid, 1, "work", g));
         } else {
             // Android shows at most three buttons: two gigs plus No.
             for (int i = 0; i < Math.min(2, gigs.size()); i++) {
                 b.addAction(0, gigs.get(i), action(c, id, nid, i + 1, "work", gigs.get(i)));
             }
         }
-        b.addAction(0, "No", action(c, id, nid, 9, "personal", ""));
+        b.addAction(0, "Personal", action(c, id, nid, 9, "personal", ""));
 
         try {
             NotificationManagerCompat.from(c).notify(nid, b.build());

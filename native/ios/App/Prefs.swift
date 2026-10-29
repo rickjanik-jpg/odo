@@ -15,12 +15,12 @@ enum Prefs {
     }
 
     static var prompt: String {
-        get { d.string(forKey: "odo.prompt") ?? "Are you dashing?" }
+        get { d.string(forKey: "odo.prompt") ?? "Was this drive for work?" }
         set { d.set(newValue, forKey: "odo.prompt") }
     }
 
     static var gigs: [String] {
-        get { (d.array(forKey: "odo.gigs") as? [String]) ?? ["DoorDash"] }
+        get { (d.array(forKey: "odo.gigs") as? [String]) ?? [] }
         set { d.set(newValue, forKey: "odo.gigs") }
     }
 
