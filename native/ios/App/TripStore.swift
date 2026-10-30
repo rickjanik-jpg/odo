@@ -11,6 +11,7 @@ struct Trip: Codable {
     var manual: Bool
     var dash: Bool?
     var path: [[Double]]  // [lat, lng] points
+    var added: Bool?      // entered by hand or imported from a spreadsheet
 }
 
 /// A drive in progress, saved often so it survives iPhone closing the app.
@@ -58,14 +59,27 @@ enum TripStore {
         write(trips)
     }
 
+    /// Adds trips entered by hand or imported. Skips any whose id is already saved.
+    @discardableResult
+    static func addMany(_ new: [Trip]) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        var trips = read()
+        let have = Set(trips.map { $0.id })
+        let fresh = new.filter { !have.contains($0.id) }
+        trips.append(contentsOf: fresh)
+        write(trips)
+        return fresh.count
+    }
+
     /// Pass nil for a field to leave it unchanged.
     @discardableResult
-    static func update(_ id: String, type: String?, purpose: String?) -> Bool {
+    static func update(_ id: String, type: String?, purpose: String?, miles: Double? = nil) -> Bool {
         lock.lock(); defer { lock.unlock() }
         var trips = read()
         guard let i = trips.firstIndex(where: { $0.id == id }) else { return false }
         if let type = type { trips[i].type = type }
         if let purpose = purpose { trips[i].purpose = purpose }
+        if let miles = miles, miles >= 0 { trips[i].miles = (miles * 100).rounded() / 100 }
         write(trips)
         return true
     }

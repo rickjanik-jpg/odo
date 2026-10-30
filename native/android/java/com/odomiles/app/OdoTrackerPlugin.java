@@ -180,13 +180,31 @@ public class OdoTrackerPlugin extends Plugin {
         }
         String type = call.getString("type");
         String purpose = call.getString("purpose");
-        boolean ok = TripStore.update(getContext(), id, type, purpose);
+        Double miles = call.getDouble("miles");
+        boolean ok = TripStore.update(getContext(), id, type, purpose, miles);
         if (type != null && !"pending".equals(type)) {
             NotificationManagerCompat.from(getContext()).cancel(Notifs.tripNotificationId(id));
         }
         JSObject ret = new JSObject();
         ret.put("ok", ok);
         call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void addTrips(PluginCall call) {
+        String json = call.getString("json");
+        if (json == null) {
+            call.reject("json is required");
+            return;
+        }
+        try {
+            int n = TripStore.addMany(getContext(), new org.json.JSONArray(json));
+            JSObject ret = new JSObject();
+            ret.put("added", n);
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("Those trips couldn't be read");
+        }
     }
 
     @PluginMethod

@@ -20,6 +20,7 @@ public class OdoTrackerPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getTrips", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "updateTrip", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "deleteTrip", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "addTrips", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getPrefs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setPrefs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getTips", returnType: CAPPluginReturnPromise),
@@ -152,11 +153,23 @@ public class OdoTrackerPlugin: CAPPlugin, CAPBridgedPlugin {
         guard let id = call.getString("id") else { call.reject("id is required"); return }
         let type = call.getString("type")
         let purpose = call.getString("purpose")
-        let ok = TripStore.update(id, type: type, purpose: purpose)
+        let miles = call.getDouble("miles")
+        let ok = TripStore.update(id, type: type, purpose: purpose, miles: miles)
         if let type = type, type != "pending" {
             DispatchQueue.main.async { Tracker.shared.clearNotification(id) }
         }
         call.resolve(["ok": ok])
+    }
+
+    /// Trips entered by hand or imported from a spreadsheet, sent as a JSON string.
+    @objc func addTrips(_ call: CAPPluginCall) {
+        guard let json = call.getString("json"), let data = json.data(using: .utf8),
+              let trips = try? JSONDecoder().decode([Trip].self, from: data) else {
+            call.reject("Those trips couldn't be read")
+            return
+        }
+        let added = TripStore.addMany(trips)
+        call.resolve(["added": added])
     }
 
     @objc func deleteTrip(_ call: CAPPluginCall) {

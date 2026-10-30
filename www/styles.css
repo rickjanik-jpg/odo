@@ -332,3 +332,15 @@ input[type=date] {
 .card.help li { margin: 0 0 8px; }
 .card.help li:last-child { margin-bottom: 0; }
 .receipt.has.zoom img { max-height: none; }
+
+/* Trips added by hand / imported */
+.thumb-hand { display: grid; place-items: center; color: var(--muted); font-size: 18px; }
+.add-trip { margin-top: 16px; color: var(--accent); }
+input[type=time] {
+  font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 10px; padding: 9px 12px; width: 100%; min-width: 0; -webkit-appearance: none; min-height: 42px;
+}
+.import-sample { list-style: none; padding: 0; margin: 12px 0 0; font-size: 14px; }
+.import-sample li { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); }
+.import-sample li span:nth-child(2) { color: var(--muted); }
+main { padding-bottom: 96px; }

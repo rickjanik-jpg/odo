@@ -39,8 +39,34 @@ final class TripStore {
         }
     }
 
-    /** Pass null for a field to leave it unchanged. */
+    /** Adds trips entered by hand or imported. Skips ids already saved. Returns how many were added. */
+    static int addMany(Context c, JSONArray incoming) {
+        synchronized (LOCK) {
+            JSONArray a = readArray(tripsFile(c));
+            java.util.HashSet<String> have = new java.util.HashSet<>();
+            for (int i = 0; i < a.length(); i++) {
+                JSONObject t = a.optJSONObject(i);
+                if (t != null) have.add(t.optString("id"));
+            }
+            int n = 0;
+            for (int i = 0; i < incoming.length(); i++) {
+                JSONObject t = incoming.optJSONObject(i);
+                if (t == null || t.optString("id").isEmpty() || have.contains(t.optString("id"))) continue;
+                a.put(t);
+                have.add(t.optString("id"));
+                n++;
+            }
+            writeText(tripsFile(c), a.toString());
+            return n;
+        }
+    }
+
     static boolean update(Context c, String id, String type, String purpose) {
+        return update(c, id, type, purpose, null);
+    }
+
+    /** Pass null for a field to leave it unchanged. */
+    static boolean update(Context c, String id, String type, String purpose, Double miles) {
         synchronized (LOCK) {
             JSONArray a = readArray(tripsFile(c));
             for (int i = 0; i < a.length(); i++) {
@@ -49,6 +75,7 @@ final class TripStore {
                     try {
                         if (type != null) t.put("type", type);
                         if (purpose != null) t.put("purpose", purpose);
+                        if (miles != null && miles >= 0) t.put("miles", Math.round(miles * 100) / 100.0);
                     } catch (Exception e) {
                         return false;
                     }

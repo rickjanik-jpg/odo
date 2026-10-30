@@ -548,6 +548,124 @@
     renderExpenseSheet();
   }
 
+  // ---------- trips added by hand or imported ----------
+
+  function openSheetWith(html) {
+    state.openTripId = null;
+    state.expDraft = null;
+    $('sheetBack').hidden = false;
+    $('sheet').hidden = false;
+    $('sheet').innerHTML = '<div class="grip"></div>' + html;
+  }
+
+  function openAddTrip() {
+    const gigs = state.prefs.gigs.length ? state.prefs.gigs : ['Work'];
+    const now = new Date();
+    const hm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    openSheetWith(`<h3 style="margin-top:4px">Add a trip</h3>
+      <div class="sub">For a drive Odo didn’t record. Use your car’s trip meter or a map for the miles.</div>
+      <form id="addTripForm" autocomplete="off">
+        <div class="field"><label for="atMiles">Miles</label>
+          <input type="number" id="atMiles" step="0.1" min="0.1" inputmode="decimal" placeholder="e.g. 12.4" required /></div>
+        <div class="field two">
+          <div><label for="atDate">Date</label><input type="date" id="atDate" value="${ymd(Date.now())}" required /></div>
+          <div><label for="atTime">Start time</label><input type="time" id="atTime" value="${hm}" /></div>
+        </div>
+        <div class="field"><label for="atType">For</label>
+          <select id="atType">${gigs.map((g) => `<option value="work:${esc(g)}">${esc(g)}</option>`).join('')}
+            <option value="personal:">Personal</option></select></div>
+        <div class="sheet-actions">
+          <button class="btn" data-act="close" type="button">Cancel</button>
+          <button class="btn primary" type="submit">Save trip</button>
+        </div>
+      </form>`);
+  }
+
+  async function saveAddTrip() {
+    const miles = parseFloat($('atMiles').value);
+    const start = new Date(`${$('atDate').value}T${$('atTime').value || '12:00'}`).getTime();
+    if (!(miles > 0) || isNaN(start)) { toast('Check the miles and date'); return; }
+    const v = $('atType').value;
+    const i = v.indexOf(':');
+    const trip = {
+      id: 'man-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      start, end: start, miles: Math.round(miles * 100) / 100,
+      type: v.slice(0, i), purpose: v.slice(i + 1), manual: true, path: [], added: true,
+    };
+    try {
+      await Tracker.addTrips({ json: JSON.stringify([trip]) });
+    } catch (e) {
+      toast('Could not save the trip');
+      return;
+    }
+    closeSheet();
+    await loadTrips();
+    toast('Trip added');
+  }
+
+  let pendingImport = null;
+
+  async function onImportPicked(file) {
+    if (!file) return;
+    if (/\.xlsx?$/i.test(file.name)) {
+      toast('Save the sheet as CSV first: in Excel, File → Save As → CSV.', 6000);
+      return;
+    }
+    let text;
+    try { text = await file.text(); } catch (e) { toast('Could not open that file'); return; }
+    const r = window.OdoImport.toTrips(text, { workLabel: workLabel() });
+    const have = new Set(state.trips.map((t) => t.id));
+    const fresh = r.trips.filter((t) => !have.has(t.id));
+    pendingImport = fresh;
+    if (r.error || !fresh.length) {
+      openSheetWith(`<h3 style="margin-top:4px">Import trips</h3>
+        <p class="warn" style="margin-top:12px"><strong>${r.error ? 'Nothing to import' : 'Already imported'}</strong>
+        ${esc(r.error || 'Every trip in this file is already in Odo.')}</p>
+        <div class="sheet-actions"><button class="btn primary" data-act="close" type="button">OK</button></div>`);
+      return;
+    }
+    const work = fresh.filter((t) => t.type === 'work');
+    const workMi = work.reduce((a, t) => a + t.miles, 0);
+    const first = Math.min(...fresh.map((t) => t.start)), last = Math.max(...fresh.map((t) => t.start));
+    const dup = r.trips.length - fresh.length;
+    const sample = fresh.slice().sort((a, b) => a.start - b.start).slice(0, 4).map((t) =>
+      `<li><span>${esc(dayFmt.format(t.start))}</span><span>${esc(t.type === 'work' ? t.purpose : 'Personal')}</span><strong>${mi(t.miles)} mi</strong></li>`).join('');
+    openSheetWith(`<h3 style="margin-top:4px">Import ${fresh.length} trip${fresh.length === 1 ? '' : 's'}?</h3>
+      <div class="sub">${esc(dayFmt.format(first))} – ${esc(dayFmt.format(last))}</div>
+      <div class="card totals" style="box-shadow:none">
+        <div><div class="stat-label">Work miles</div><div class="stat-value">${mi(workMi)}<span class="unit">mi</span></div></div>
+        <div><div class="stat-label">Est. deduction</div><div class="stat-value" style="color:var(--accent)">${money(workMi * state.rate)}</div></div>
+      </div>
+      <ul class="import-sample">${sample}</ul>
+      ${fresh.length > 4 ? `<p class="note" style="margin:4px 0 0">…and ${fresh.length - 4} more.</p>` : ''}
+      ${r.skipped || dup ? `<p class="note" style="margin:8px 0 0">${[r.skipped ? `${r.skipped} row${r.skipped === 1 ? '' : 's'} skipped (no date or miles)` : '', dup ? `${dup} already in Odo` : ''].filter(Boolean).join(' · ')}.</p>` : ''}
+      <div class="sheet-actions">
+        <button class="btn" data-act="close" type="button">Cancel</button>
+        <button class="btn primary" data-act="import-go" type="button">Import</button>
+      </div>`);
+  }
+
+  async function runImport() {
+    const list = pendingImport;
+    if (!list || !list.length) return;
+    pendingImport = null;
+    let added = 0;
+    try {
+      const r = await Tracker.addTrips({ json: JSON.stringify(list) });
+      added = r.added == null ? list.length : r.added;
+    } catch (e) {
+      toast('The import didn’t work. Nothing was changed.');
+      return;
+    }
+    closeSheet();
+    state.tab = 'trips';
+    state.period = 'year';
+    state.offset = 0;
+    await loadTrips();
+    window.scrollTo(0, 0);
+    toast(`Imported ${added} trip${added === 1 ? '' : 's'}`, 4000);
+  }
+
   // ---------- help ----------
 
   function helpView() {
@@ -643,7 +761,7 @@
     if (!inRange.length) {
       html += `<div class="empty"><strong>No trips ${state.offset === 0 ? 'yet' : 'in this period'}</strong>
         ${state.offset === 0 ? (state.status.auto ? 'Your next drive will show up here.' : 'Tap Start drive, or turn on automatic tracking.') : ''}</div>`;
-      return html;
+      return html + addTripLink();
     }
 
     const days = new Map();
@@ -659,7 +777,11 @@
       html += list.map(tripRow).join('');
       html += '</div>';
     }
-    return html;
+    return html + addTripLink();
+  }
+
+  function addTripLink() {
+    return '<button class="link-btn add-trip" data-act="add-trip" type="button">+ Add a trip by hand</button>';
   }
 
   function tripRow(t) {
@@ -675,9 +797,11 @@
       ).join('') + `<button data-act="quick" data-id="${esc(t.id)}" data-purpose="" type="button">Personal</button></div>`;
     }
     return `<div class="trip ${type === 'pending' ? 'pending' : ''}" data-act="open" data-id="${esc(t.id)}" role="button" tabindex="0">
-        <svg class="thumb ${type}" viewBox="0 0 56 42" aria-hidden="true"><path d="${routeD(t.path, 56, 42, 6)}"/></svg>
+        ${t.path && t.path.length
+          ? `<svg class="thumb ${type}" viewBox="0 0 56 42" aria-hidden="true"><path d="${routeD(t.path, 56, 42, 6)}"/></svg>`
+          : `<div class="thumb thumb-hand ${type}" aria-hidden="true">✎</div>`}
         <div class="trip-main">
-          <div class="trip-time">${esc(timeFmt.format(t.start))} – ${esc(timeFmt.format(t.end))}</div>
+          <div class="trip-time">${t.added ? (String(t.id).startsWith('imp-') ? 'Imported' : 'Added by hand') : `${esc(timeFmt.format(t.start))} – ${esc(timeFmt.format(t.end))}`}</div>
           ${chip}
         </div>
         <div class="trip-miles">${mi(t.miles)} mi${type === 'work' ? `<small>${money(t.miles * state.rate)}</small>` : ''}</div>
@@ -761,6 +885,11 @@
       <input type="text" id="promptInput" maxlength="40" value="${esc(state.prefs.prompt)}" />
       <p class="note" style="margin:8px 0 0">Shown after each drive with Work and Personal buttons.</p></div>`;
 
+    html += `<div class="section-title">Past trips</div><div class="card"><div class="row">
+      <div><strong>Import from a spreadsheet</strong><p>Bring in miles you logged before Odo. In Excel, choose File → Save As → CSV, then pick that file here.</p></div>
+      <button class="btn" data-act="import" type="button">Choose file</button></div></div>
+    <p class="note">The sheet needs a <strong>Date</strong> column and a <strong>Miles</strong> column (or start and end odometer). A <strong>Purpose</strong> column is optional. Rows marked “Personal” are imported as personal.</p>`;
+
     html += `<div class="section-title">Help</div><div class="card"><div class="row">
       <div><strong>Help &amp; tips</strong><p>How Odo works, Siri commands, and what you can deduct.</p></div>
       <button class="btn" data-act="help" type="button">Open</button></div></div>`;
@@ -812,8 +941,9 @@
     const custom = state.otherPurpose || (purpose && !gigs.includes(purpose));
 
     const sheet = $('sheet');
-    const keepMap = !drawMap && sheet.querySelector('#map');
-    const mapHtml = keepMap ? '' : '<div class="map" id="map"></div>';
+    const hasPath = !!(t.path && t.path.length);
+    const keepMap = !drawMap && sheet.querySelector('#sheetBody');
+    const mapHtml = keepMap || !hasPath ? '' : '<div class="map" id="map"></div>';
 
     const options = gigs.map((g) => `<option value="${esc(g)}" ${!custom && purpose === g ? 'selected' : ''}>${esc(g)}</option>`).join('');
     const purposeField = type !== 'work' ? '' : `<div class="field"><label for="purposeSel">Purpose</label>
@@ -823,12 +953,16 @@
       </div>`;
 
     const body = `<h3>${mi(t.miles)} mi${type === 'work' ? ` <span style="color:var(--accent);font-size:17px">· ${money(t.miles * state.rate)}</span>` : ''}</h3>
-      <div class="sub">${esc(dayFmt.format(t.start))} · ${esc(timeFmt.format(t.start))} – ${esc(timeFmt.format(t.end))} · ${duration(t.end - t.start)}${t.manual ? ' · started by hand' : ''}</div>
+      <div class="sub">${t.added
+        ? `${esc(dayFmt.format(t.start))} · ${String(t.id).startsWith('imp-') ? 'imported from a spreadsheet' : 'added by hand'}`
+        : `${esc(dayFmt.format(t.start))} · ${esc(timeFmt.format(t.start))} – ${esc(timeFmt.format(t.end))} · ${duration(t.end - t.start)}${t.manual ? ' · started by hand' : ''}`}</div>
       <div class="seg">
         <button class="${type === 'work' ? 'on work' : ''}" data-act="type" data-v="work" type="button">Work</button>
         <button class="${type === 'personal' ? 'on' : ''}" data-act="type" data-v="personal" type="button">Personal</button>
       </div>
       ${purposeField}
+      <div class="field"><label for="milesInput">Miles</label>
+        <input type="number" id="milesInput" step="0.1" min="0" inputmode="decimal" value="${t.miles}" /></div>
       <div class="sheet-actions">
         <button class="btn danger" data-act="delete" type="button">Delete</button>
         <button class="btn primary" data-act="close" type="button">Done</button>
@@ -838,7 +972,7 @@
       sheet.querySelector('#sheetBody').innerHTML = body;
     } else {
       sheet.innerHTML = `<div class="grip"></div>${mapHtml}<div id="sheetBody">${body}</div>`;
-      drawRoute(t);
+      if (hasPath) drawRoute(t);
     }
   }
 
@@ -924,6 +1058,9 @@
     }
     else if (act === 'help') { ev.preventDefault(); state.helpFrom = state.tab === 'help' ? state.helpFrom : state.tab; state.tab = 'help'; render(); window.scrollTo(0, 0); }
     else if (act === 'help-back') { state.tab = state.helpFrom || 'trips'; render(); window.scrollTo(0, 0); }
+    else if (act === 'add-trip') openAddTrip();
+    else if (act === 'import') $('importFile').click();
+    else if (act === 'import-go') runImport();
     else if (act === 'open-exp') openExpense(id);
     else if (act === 'photo') { syncDraft(); $('receiptFile').click(); }
     else if (act === 'photo-zoom') el.classList.toggle('zoom');
@@ -976,8 +1113,14 @@
 
   document.addEventListener('change', (ev) => {
     const t = ev.target;
+    if (t.id === 'importFile') { const f = t.files && t.files[0]; t.value = ''; onImportPicked(f); return; }
     if (t.id === 'receiptFile') { const f = t.files && t.files[0]; t.value = ''; onReceiptPicked(f); return; }
     if (t.id === 'expCat') { syncDraft(); renderExpenseSheet(); return; }
+    if (t.id === 'milesInput') {
+      const v = parseFloat(t.value);
+      if (v >= 0 && state.openTripId) setTrip(state.openTripId, { miles: Math.round(v * 100) / 100 });
+      return;
+    }
     if (t.id === 'autoToggle') toggleAuto(t.checked);
     else if (t.id === 'rateInput') {
       const c = parseFloat(t.value);
@@ -996,6 +1139,7 @@
 
   document.addEventListener('submit', (ev) => {
     if (ev.target.id === 'expForm') { ev.preventDefault(); saveExpense(); return; }
+    if (ev.target.id === 'addTripForm') { ev.preventDefault(); saveAddTrip(); return; }
     if (ev.target.id !== 'gigForm') return;
     ev.preventDefault();
     const v = $('gigInput').value.trim();
@@ -1117,10 +1261,16 @@
         emit('tripsChanged', {});
       },
       async getTrips() { return { trips: trips.slice() }; },
-      async updateTrip({ id, type, purpose }) {
+      async updateTrip({ id, type, purpose, miles }) {
         const t = trips.find((x) => x.id === id);
-        if (t) { if (type != null) t.type = type; if (purpose != null) t.purpose = purpose; }
+        if (t) { if (type != null) t.type = type; if (purpose != null) t.purpose = purpose; if (miles != null) t.miles = miles; }
         return { ok: !!t };
+      },
+      async addTrips({ json }) {
+        const have = new Set(trips.map((t) => t.id));
+        const fresh = JSON.parse(json).filter((t) => !have.has(t.id));
+        trips = trips.concat(fresh);
+        return { added: fresh.length };
       },
       async deleteTrip({ id }) { trips = trips.filter((x) => x.id !== id); return { ok: true }; },
       async getPrefs() { return { gigs: prefs.gigs.slice(), prompt: prefs.prompt }; },
