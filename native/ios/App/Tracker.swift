@@ -46,6 +46,7 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
     private var probeStart: Date?
     private var probeFirst: CLLocation?
     private var probeFast = 0
+    private var motionQuietUntil = Date.distantPast
 
     private var lastFix: CLLocation?
     private var timer: Timer?
@@ -247,8 +248,12 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
     private func onActivity(_ a: CMMotionActivity) {
         let sure = a.confidence != .low
         switch mode {
-        case .idle, .probing:
-            if a.automotive && sure && Prefs.auto && hasLocation { beginTrip(manual: false) }
+        case .idle:
+            // Motion sensors can keep saying "in a car" for a minute after you park, so they only
+            // start a check. A trip begins once GPS confirms driving speed.
+            if a.automotive && sure && Prefs.auto && hasAlways && Date() >= motionQuietUntil { startProbe() }
+        case .probing:
+            break
         case .tracking:
             if manual { return }
             if a.automotive {
@@ -269,20 +274,12 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
         probeFast = 0
         startGPS(distanceFilter: 10)
         startTimer()
-        if motionAllowed {
-            let now = Date()
-            motion.queryActivityStarting(from: now.addingTimeInterval(-180), to: now, to: .main) { [weak self] acts, _ in
-                guard let self = self, self.mode == .probing else { return }
-                if let last = acts?.last, last.automotive, last.confidence != .low {
-                    self.beginTrip(manual: false)
-                }
-            }
-        }
         postState()
     }
 
     private func endProbe() {
         guard mode == .probing else { return }
+        motionQuietUntil = Date().addingTimeInterval(300) // don't keep re-checking while parked
         stopTimer()
         stopGPS()
         mode = .idle
@@ -398,6 +395,10 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
         if acc > 40 { return } // too fuzzy to count
         let d = a.distance(from: l)
         if d < max(20, acc) { return } // GPS jitter while parked
+        // Indoors or parked, GPS points wander and would add fake miles. Only count a fix when the
+        // phone is really moving (speed from GPS), or when the jump is far bigger than the GPS error.
+        let moving = l.speed >= 0 ? l.speed >= 1.5 : d >= 3 * max(acc, 15)
+        if !moving { return }
         let dt = max(1, l.timestamp.timeIntervalSince(a.timestamp))
         if d / dt > 70 && dt < 60 { return } // impossible jump (~155 mph)
 
@@ -453,6 +454,7 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
         stopTimer()
         stopGPS()
         mode = .idle
+        motionQuietUntil = Date().addingTimeInterval(90)
         try? FileManager.default.removeItem(at: TripStore.currentURL)
 
         let mi = meters / 1609.344
