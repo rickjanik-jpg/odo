@@ -3,7 +3,7 @@
 require 'xcodeproj'
 
 proj_path = ARGV[0] || 'ios/App/App.xcodeproj'
-files = %w[MainViewController.swift OdoTrackerPlugin.swift Tracker.swift TripStore.swift Prefs.swift OdoIntents.swift]
+files = %w[MainViewController.swift OdoTrackerPlugin.swift Tracker.swift TripStore.swift Prefs.swift OdoIntents.swift TipJar.swift]
 
 project = Xcodeproj::Project.open(proj_path)
 target = project.targets.find { |t| t.name == 'App' } or abort('ios-add-files: App target not found')

@@ -267,3 +267,21 @@ body.welcoming { padding-bottom: var(--safe-b); }
 .welcome-points li::before { content: "✓"; color: var(--accent); font-weight: 800; margin-right: 8px; }
 .welcome-go { width: 100%; padding: 15px; font-size: 17px; border-radius: 14px; }
 .welcome-note { margin: 14px 4px 0; }
+
+/* Tips */
+.tip-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.tip-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 6px;
+  border: 1px solid var(--line); background: var(--bg); border-radius: 14px;
+}
+.tip-btn:disabled { opacity: .5; }
+.tip-icon { font-size: 22px; line-height: 1.1; }
+.tip-price { font-weight: 800; font-size: 17px; font-variant-numeric: tabular-nums; }
+.tip-name { font-size: 12px; color: var(--muted); }
+.tip-thanks { margin: 10px 0 0; color: var(--accent); font-weight: 600; }
+.tip-nudge p { margin: 0; font-size: 14px; }
+.tip-nudge strong { display: block; font-size: 15px; }
+.link-btn {
+  display: block; margin: 12px auto 0; border: none; background: none;
+  color: var(--muted); font-weight: 600; font-size: 14px; padding: 8px 12px;
+}

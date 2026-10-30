@@ -79,6 +79,7 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
     func boot() {
         guard !booted else { return }
         booted = true
+        TipJar.shared.start()
         manager.delegate = self
         manager.activityType = .automotiveNavigation
         manager.pausesLocationUpdatesAutomatically = false

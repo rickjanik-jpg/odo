@@ -20,6 +20,9 @@
     status: {},
     prefs: { gigs: [], prompt: 'Was this drive for work?' },
     welcomed: safeGet('odo.welcomed') === '1',
+    tips: null,          // { list: [...], count, error } once loaded
+    tipBusy: false,
+    tipNudgeOff: safeGet('odo.tipNudgeOff') === '1',
     period: safeGet(PERIOD_KEY) || 'week',
     offset: 0,
     rate: parseFloat(safeGet(RATE_KEY)) || DEFAULT_RATE,
@@ -240,6 +243,60 @@
 
   // ---------- rendering ----------
 
+  // ---------- tips ----------
+
+  function tipsSupported() {
+    return state.status.platform === 'ios' || PLATFORM === 'ios';
+  }
+
+  async function loadTips() {
+    if (!tipsSupported() || (state.tips && !state.tips.error)) return;
+    try {
+      const r = await Tracker.getTips();
+      state.tips = { list: r.tips || [], count: r.count || 0 };
+    } catch (e) {
+      state.tips = { list: [], count: 0, error: true };
+    }
+    render();
+  }
+
+  async function buyTip(id) {
+    if (state.tipBusy) return;
+    state.tipBusy = true;
+    render();
+    try {
+      const r = await Tracker.buyTip({ id });
+      if (state.tips) state.tips.count = r.count || state.tips.count;
+      if (r.result === 'thanked') {
+        dismissTipNudge();
+        toast('Thank you! Tips like yours keep Odo free.', 4000);
+      } else if (r.result === 'pending') {
+        toast('Your tip is waiting for approval. Thank you!', 4000);
+      }
+    } catch (e) {
+      toast('The tip didn’t go through. You weren’t charged.', 4000);
+    }
+    state.tipBusy = false;
+    render();
+  }
+
+  function dismissTipNudge() {
+    state.tipNudgeOff = true;
+    safeSet('odo.tipNudgeOff', '1');
+  }
+
+  function tipButtons() {
+    const t = state.tips;
+    if (!t) return '<p class="note" style="margin:10px 0 0">Loading…</p>';
+    if (!t.list.length) return '<p class="note" style="margin:10px 0 0">Tips aren’t available yet.</p>';
+    const icons = ['☕', '🍔', '⛽'];
+    return '<div class="tip-row">' + t.list.map((p, i) =>
+      `<button class="tip-btn" data-act="tip" data-id="${esc(p.id)}" type="button" ${state.tipBusy ? 'disabled' : ''}>
+        <span class="tip-icon" aria-hidden="true">${icons[i] || '💚'}</span>
+        <span class="tip-price">${esc(p.price)}</span>
+        <span class="tip-name">${esc(p.name)}</span></button>`).join('') + '</div>';
+  }
+
   function showWelcome() {
     return !state.welcomed && !state.status.auto && state.trips.length === 0;
   }
@@ -326,6 +383,13 @@
         <div><div class="stat-label">Personal</div><div class="stat-value">${mi(personal)}<span class="unit">mi</span></div></div>
         <div><div class="stat-label">Need a label</div><div class="stat-value">${pending}<span class="unit">${pending === 1 ? 'trip' : 'trips'}</span></div></div>
       </div>`;
+
+    if (tipsSupported() && !state.tipNudgeOff && state.trips.length >= 20 && state.tips && state.tips.list.length && !state.tips.count) {
+      html += `<div class="card tip-nudge"><p><strong>Enjoying Odo?</strong>
+          It’s free with no ads or subscription. A small tip helps keep it that way.</p>
+        ${tipButtons()}
+        <button class="link-btn" data-act="tip-later" type="button" style="margin-top:6px">Not now</button></div>`;
+    }
 
     if (!inRange.length) {
       html += `<div class="empty"><strong>No trips ${state.offset === 0 ? 'yet' : 'in this period'}</strong>
@@ -447,6 +511,16 @@
     html += `<div class="section-title">Question after each drive</div><div class="card">
       <input type="text" id="promptInput" maxlength="40" value="${esc(state.prefs.prompt)}" />
       <p class="note" style="margin:8px 0 0">Shown after each drive with Work and Personal buttons.</p></div>`;
+
+    if (tipsSupported()) {
+      const n = state.tips ? state.tips.count : 0;
+      html += `<div class="section-title">Support Odo</div><div class="card">
+        <div><strong>Leave a tip</strong><p class="note" style="margin:4px 0 0">Odo is free with no ads or subscription.
+          If it saves you time or money, a tip helps keep it that way. Tips don’t unlock anything.</p></div>
+        ${tipButtons()}
+        ${n ? `<p class="note tip-thanks">You’ve tipped ${n} time${n === 1 ? '' : 's'}. Thank you! 💚</p>` : ''}
+      </div>`;
+    }
 
     html += `<div class="section-title">Mileage rate</div><div class="card"><div class="row">
       <div><strong>Cents per business mile</strong><p>The 2026 IRS business rate is 72.5¢.</p></div>
@@ -594,6 +668,8 @@
       }
       if (state.status.auto) Tracker.setAuto({ enabled: true }).catch(() => {});
     }
+    else if (act === 'tip') buyTip(el.dataset.id);
+    else if (act === 'tip-later') { dismissTipNudge(); render(); }
     else if (act === 'welcome') {
       state.welcomed = true;
       safeSet('odo.welcomed', '1');
@@ -679,6 +755,7 @@
     await loadPrefs();
     await loadStatus();
     await loadTrips();
+    loadTips();
     startPolling();
   })();
 
@@ -738,6 +815,7 @@
         dashSupported: true, dashing: false, dashSince: 0 });
     }
     let timer = null;
+    let tipCount = 0;
     const snap = () => Object.assign({}, status);
 
     return {
@@ -769,6 +847,13 @@
       },
       async deleteTrip({ id }) { trips = trips.filter((x) => x.id !== id); return { ok: true }; },
       async getPrefs() { return { gigs: prefs.gigs.slice(), prompt: prefs.prompt }; },
+      async getTips() {
+        return { count: tipCount, tips: [
+          { id: 'com.odomiles.app.tip.small', price: '$0.99', name: 'Small tip' },
+          { id: 'com.odomiles.app.tip.medium', price: '$1.99', name: 'Kind tip' },
+          { id: 'com.odomiles.app.tip.large', price: '$4.99', name: 'Big tip' }] };
+      },
+      async buyTip() { tipCount++; return { result: 'thanked', count: tipCount }; },
       async setPrefs(p) { if (p.gigs) prefs.gigs = p.gigs.slice(); if (p.prompt) prefs.prompt = p.prompt; },
       addListener(ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); return Promise.resolve({ remove() {} }); },
     };

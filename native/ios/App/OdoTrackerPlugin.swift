@@ -22,6 +22,8 @@ public class OdoTrackerPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "deleteTrip", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getPrefs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setPrefs", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getTips", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "buyTip", returnType: CAPPluginReturnPromise),
     ]
 
     private var observers: [NSObjectProtocol] = []
@@ -178,6 +180,32 @@ public class OdoTrackerPlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async {
             Tracker.shared.refreshCategories()
             call.resolve()
+        }
+    }
+
+    // MARK: Tips
+
+    @objc func getTips(_ call: CAPPluginCall) {
+        Task {
+            do {
+                let list = try await TipJar.shared.load()
+                let tips: [[String: Any]] = list.map { ["id": $0.id, "price": $0.displayPrice, "name": $0.displayName] }
+                call.resolve(["tips": tips, "count": TipJar.shared.count])
+            } catch {
+                call.reject("Tips aren't available right now", "TIPS_UNAVAILABLE")
+            }
+        }
+    }
+
+    @objc func buyTip(_ call: CAPPluginCall) {
+        guard let id = call.getString("id") else { call.reject("id is required"); return }
+        Task {
+            do {
+                let outcome = try await TipJar.shared.buy(id)
+                call.resolve(["result": outcome.rawValue, "count": TipJar.shared.count])
+            } catch {
+                call.reject("The tip didn't go through", "TIP_FAILED")
+            }
         }
     }
 }
