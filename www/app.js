@@ -22,6 +22,8 @@
     welcomed: safeGet('odo.welcomed') === '1',
     tips: null,          // { list: [...], count, error } once loaded
     tipBusy: false,
+    expenses: [],
+    expDraft: null,      // expense being added or edited in the sheet
     tipNudgeOff: safeGet('odo.tipNudgeOff') === '1',
     period: safeGet(PERIOD_KEY) || 'week',
     offset: 0,
@@ -218,6 +220,7 @@
   // ---------- start / stop ----------
 
   async function onFab() {
+    if (state.tab === 'expenses') { openExpense(null); return; }
     if (state.status.tracking) {
       try { await Tracker.stopTrip(); } catch (e) { /* ignore */ }
       setTimeout(() => { loadStatus(); loadTrips(); }, 600);
@@ -305,7 +308,8 @@
     const welcome = showWelcome();
     document.body.classList.toggle('welcoming', welcome);
     document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === state.tab));
-    $('view').innerHTML = welcome ? welcomeView() : state.tab === 'trips' ? tripsView() : settingsView();
+    const views = { trips: tripsView, expenses: expensesView, settings: settingsView, help: helpView };
+    $('view').innerHTML = welcome ? welcomeView() : (views[state.tab] || tripsView)();
     renderChrome();
   }
 
@@ -334,10 +338,262 @@
   function renderChrome() {
     const s = state.status;
     const fab = $('fab');
-    fab.hidden = state.tab !== 'trips';
-    fab.classList.toggle('recording', !!s.tracking);
-    fab.textContent = s.tracking ? `Stop · ${mi(s.miles)} mi` : 'Start drive';
+    if (state.tab === 'expenses') {
+      fab.hidden = false;
+      fab.classList.remove('recording');
+      fab.textContent = '+ Add expense';
+    } else {
+      fab.hidden = state.tab !== 'trips';
+      fab.classList.toggle('recording', !!s.tracking);
+      fab.textContent = s.tracking ? `Stop · ${mi(s.miles)} mi` : 'Start drive';
+    }
     $('liveDot').hidden = !s.tracking;
+  }
+
+  function periodBar(r) {
+    return '<div class="period">' + [['week', 'Week'], ['2wk', '2 weeks'], ['month', 'Month'], ['year', 'Year']]
+      .map(([k, l]) => `<button data-act="period" data-k="${k}" class="${state.period === k ? 'on' : ''}" type="button">${l}</button>`)
+      .join('') + `</div><div class="range">
+        <button class="arrow" data-act="prev" type="button" aria-label="Previous">‹</button>
+        <h2>${esc(rangeLabel(state.period, r))}</h2>
+        <button class="arrow" data-act="next" type="button" aria-label="Next" ${state.offset >= 0 ? 'disabled' : ''}>›</button>
+      </div>`;
+  }
+
+  // ---------- expenses ----------
+
+  const Exp = window.OdoExpenses;
+  const photoUrls = new Map(); // blob -> object URL, so photos aren't re-decoded on every render
+
+  function photoUrl(blob) {
+    if (!blob) return '';
+    if (!photoUrls.has(blob)) photoUrls.set(blob, URL.createObjectURL(blob));
+    return photoUrls.get(blob);
+  }
+
+  function dropPhotoUrl(blob) {
+    if (blob && photoUrls.has(blob)) { URL.revokeObjectURL(photoUrls.get(blob)); photoUrls.delete(blob); }
+  }
+
+  async function loadExpenses() {
+    if (!Exp) return;
+    try {
+      state.expenses = (await Exp.all()).sort((a, b) => b.date - a.date || b.created - a.created);
+    } catch (e) {
+      toast('Could not open saved expenses');
+    }
+    if (state.tab === 'expenses') render();
+  }
+
+  function ymd(ms) {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  function expensesView() {
+    const r = range(state.period, state.offset);
+    const inRange = state.expenses.filter((e) => e.date >= r.s.getTime() && e.date < r.e.getTime());
+    const expTotal = inRange.reduce((a, e) => a + Exp.deductible(e), 0);
+    const workMiles = state.trips.filter((t) => t.type === 'work' && t.start >= r.s.getTime() && t.start < r.e.getTime())
+      .reduce((a, t) => a + t.miles, 0);
+    const mileage = workMiles * state.rate;
+
+    let html = periodBar(r);
+    html += `<div class="card totals">
+        <div class="big">
+          <div><div class="stat-label">Work expenses</div><div class="stat-value">${money(expTotal)}</div></div>
+          <div class="deduction"><div class="stat-label">Total with mileage</div><div class="stat-value">${money(expTotal + mileage)}</div></div>
+        </div>
+        <div><div class="stat-label">Mileage deduction</div><div class="stat-value small">${money(mileage)}</div></div>
+        <div><div class="stat-label">Receipts</div><div class="stat-value small">${inRange.filter((e) => e.photo).length}<span class="unit">of ${inRange.length}</span></div></div>
+      </div>`;
+
+    if (!inRange.length) {
+      html += `<div class="empty"><strong>No expenses ${state.offset === 0 ? 'yet' : 'in this period'}</strong>
+        Add parking, tolls, your phone bill or delivery gear, and snap the receipt.</div>`;
+      if (!state.expenses.length) html += `<p class="note center">Gas, car washes and repairs are already covered by the mileage rate. <a href="#" data-act="help">Learn more</a></p>`;
+      return html;
+    }
+
+    const days = new Map();
+    for (const e of inRange) {
+      const k = startOfDay(e.date).getTime();
+      if (!days.has(k)) days.set(k, []);
+      days.get(k).push(e);
+    }
+    for (const [k, list] of days) {
+      html += `<div class="day"><div class="day-head"><span>${esc(dayFmt.format(new Date(k)))}</span>
+        <span>${money(list.reduce((a, e) => a + Exp.deductible(e), 0))}</span></div>`;
+      html += list.map(expenseRow).join('');
+      html += '</div>';
+    }
+    return html;
+  }
+
+  function expenseRow(e) {
+    const cat = Exp.category(e.category);
+    const ded = Exp.deductible(e);
+    const thumb = e.photo
+      ? `<img class="exp-thumb" src="${photoUrl(e.photo)}" alt="" />`
+      : `<div class="exp-thumb exp-icon" aria-hidden="true">${cat.icon}</div>`;
+    const bits = e.note ? [esc(cat.name)] : [];
+    if (cat.share && e.share != null && e.share < 100) bits.push(`${e.share}% work`);
+    if (cat.covered) bits.push('covered by mileage');
+    if (!e.photo) bits.push('no receipt');
+    const sub = bits.join(' · ');
+    return `<div class="trip exp" data-act="open-exp" data-id="${esc(e.id)}" role="button" tabindex="0">
+        ${thumb}
+        <div class="trip-main">
+          <div class="exp-title">${esc(e.note || cat.name)}</div>
+          ${sub ? `<div class="trip-time">${sub}</div>` : ''}
+        </div>
+        <div class="trip-miles">${money(cat.covered || ded !== e.amount ? ded : e.amount)}${ded !== e.amount ? `<small>of ${money(e.amount)}</small>` : ''}</div>
+      </div>`;
+  }
+
+  function openExpense(id) {
+    const e = id ? state.expenses.find((x) => x.id === id) : null;
+    state.openTripId = null;
+    state.expDraft = e ? Object.assign({}, e) : {
+      id: null, date: startOfDay(Date.now()).getTime(), amount: null, category: 'parking', share: 100, note: '', photo: null,
+    };
+    $('sheetBack').hidden = false;
+    $('sheet').hidden = false;
+    renderExpenseSheet();
+  }
+
+  /** Copies what's typed in the form into the draft, so a re-render doesn't lose it. */
+  function syncDraft() {
+    const d = state.expDraft;
+    if (!d) return;
+    const v = (id) => { const el = $(id); return el ? el.value : null; };
+    const amt = v('expAmount');
+    if (amt != null) d.amount = amt === '' ? null : Math.round(parseFloat(amt) * 100) / 100;
+    const date = v('expDate');
+    if (date) { const t = new Date(date + 'T12:00').getTime(); if (!isNaN(t)) d.date = startOfDay(t).getTime(); }
+    const cat = v('expCat');
+    if (cat) d.category = cat;
+    const share = v('expShare');
+    if (share != null && share !== '') d.share = Math.max(0, Math.min(100, Math.round(parseFloat(share))));
+    const note = v('expNote');
+    if (note != null) d.note = note.trim();
+  }
+
+  function renderExpenseSheet() {
+    const d = state.expDraft;
+    if (!d) return;
+    const cat = Exp.category(d.category);
+    const photo = d.photo
+      ? `<button class="receipt has" data-act="photo-zoom" type="button" aria-label="Enlarge receipt"><img src="${photoUrl(d.photo)}" alt="Receipt photo" /></button>
+         <div class="receipt-actions"><button class="link-btn" data-act="photo" type="button">Change photo</button>
+           <button class="link-btn danger" data-act="photo-remove" type="button">Remove</button></div>`
+      : `<button class="receipt" data-act="photo" type="button"><span class="receipt-icon" aria-hidden="true">📷</span>
+           <span>Add receipt photo</span><small>Take a picture or pick one from your library</small></button>`;
+
+    $('sheet').innerHTML = `<div class="grip"></div>
+      <h3 style="margin-top:4px">${d.id ? 'Edit expense' : 'Add expense'}</h3>
+      ${photo}
+      <form id="expForm" autocomplete="off">
+        <div class="field two">
+          <div><label for="expAmount">Amount</label>
+            <input type="number" id="expAmount" inputmode="decimal" step="0.01" min="0" placeholder="0.00" value="${d.amount == null ? '' : d.amount}" required /></div>
+          <div><label for="expDate">Date</label><input type="date" id="expDate" value="${ymd(d.date)}" required /></div>
+        </div>
+        <div class="field"><label for="expCat">Category</label>
+          <select id="expCat">${Exp.CATEGORIES.map((c) => `<option value="${c.id}" ${c.id === d.category ? 'selected' : ''}>${c.icon} ${esc(c.name)}</option>`).join('')}</select></div>
+        ${cat.share ? `<div class="field"><label for="expShare">Work share of this bill (%)</label>
+          <input type="number" id="expShare" inputmode="numeric" min="0" max="100" step="1" value="${d.share == null ? 100 : d.share}" />
+          <p class="note" style="margin:6px 0 0">Only the part you use for work counts. If half your phone use is for work, enter 50.</p></div>` : ''}
+        ${cat.covered ? `<div class="warn"><strong>Usually not deductible separately.</strong>
+          If you deduct miles at the IRS rate, gas, car washes, oil and repairs are already included, so Odo doesn’t add this to your totals.
+          Keep it only if you track actual car expenses instead.</div>` : ''}
+        <div class="field"><label for="expNote">Note (optional)</label>
+          <input type="text" id="expNote" maxlength="60" placeholder="e.g. Airport parking, Verizon bill" value="${esc(d.note || '')}" /></div>
+        <div class="sheet-actions">
+          ${d.id ? '<button class="btn danger" data-act="exp-delete" type="button">Delete</button>' : '<button class="btn" data-act="close" type="button">Cancel</button>'}
+          <button class="btn primary" type="submit">Save</button>
+        </div>
+      </form>`;
+  }
+
+  async function saveExpense() {
+    syncDraft();
+    const d = state.expDraft;
+    if (!d) return;
+    if (!(d.amount > 0)) { toast('Enter the amount'); return; }
+    const e = Object.assign({}, d);
+    if (!e.id) { e.id = 'e' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); e.created = Date.now(); }
+    if (!Exp.category(e.category).share) delete e.share;
+    try {
+      await Exp.put(e);
+    } catch (err) {
+      toast('Could not save. Your phone may be low on storage.');
+      return;
+    }
+    const old = state.expenses.find((x) => x.id === e.id);
+    if (old && old.photo && old.photo !== e.photo) dropPhotoUrl(old.photo);
+    state.expenses = state.expenses.filter((x) => x.id !== e.id).concat(e).sort((a, b) => b.date - a.date || (b.created || 0) - (a.created || 0));
+    closeSheet();
+    render();
+    toast(Exp.category(e.category).covered ? 'Saved (not counted, covered by mileage)' : 'Expense saved');
+  }
+
+  async function onReceiptPicked(file) {
+    if (!file || !state.expDraft) return;
+    syncDraft();
+    toast('Adding photo…', 1500);
+    const blob = await Exp.shrinkPhoto(file);
+    if (!state.expDraft) return;
+    state.expDraft.photo = blob;
+    renderExpenseSheet();
+  }
+
+  // ---------- help ----------
+
+  function helpView() {
+    const ios = state.status.platform === 'ios' || PLATFORM === 'ios';
+    const p = esc(state.prefs.prompt);
+    let html = `<button class="back-link" data-act="help-back" type="button">‹ Back</button>
+      <h1 class="page-title">Help &amp; tips</h1>`;
+    const sec = (title, body) => `<div class="section-title">${title}</div><div class="card help">${body}</div>`;
+
+    html += sec('How Odo works', `<ul>
+      <li>Odo notices when you start driving and records the trip on its own. You don’t need to press anything.</li>
+      <li>When the drive ends, Odo asks “${p}” Tap <strong>Work</strong> or <strong>Personal</strong> on the notification, or label trips later on the Trips screen.</li>
+      <li>Tap any trip to see its map, change the label, fix the miles or delete it.</li>
+      <li>Your deduction is your work miles times the IRS rate (72.5¢ a mile for 2026). You can change the rate in Settings.</li></ul>`);
+
+    html += sec('Shifts', `<ul>
+      <li>Tap <strong>Start shift</strong> on the Trips screen and every drive is logged as ${esc(workLabel())} without asking.</li>
+      <li>A shift ends when you tap <strong>End shift</strong>, or after 12 hours.</li>
+      <li>Add names like DoorDash or Amazon Flex in <strong>Settings → Work labels</strong>. The first one is used for shifts.</li></ul>`);
+
+    if (ios) {
+      html += sec('Siri, hands-free', `<ul>
+        <li>Say <strong>“Hey Siri, start shift in Odo”</strong> when you start working.</li>
+        <li>Say <strong>“Hey Siri, end shift in Odo”</strong> when you’re done.</li>
+        <li>“Start dash in Odo” and “End dash in Odo” work too.</li>
+        <li>To start a shift automatically when you open a work app like Dasher, set up the Shortcuts automation in <strong>Settings → Start shifts from a work app</strong>.</li></ul>`);
+    }
+
+    html += sec('Getting every mile', `<ul>
+      <li>Location must be set to <strong>${ios ? 'Always' : 'Allow all the time'}</strong>, with Precise Location on.</li>
+      <li>Don’t swipe Odo away in the app switcher. ${ios ? 'iPhone may not wake it for your next drive if you do.' : 'Android may stop it until you open it again.'}</li>
+      ${ios ? '<li>Low Power Mode can delay detection. Odo still starts the trip from where you parked.</li>' : '<li>Set battery use for Odo to <strong>Unrestricted</strong> so your phone doesn’t shut it down mid-shift.</li>'}
+      <li>Forgot to label a trip? It waits on the Trips screen under “Need a label.”</li></ul>`);
+
+    html += sec('Expenses', `<ul>
+      <li>Add work costs on the <strong>Expenses</strong> tab and snap a photo of the receipt.</li>
+      <li><strong>Count these:</strong> parking and tolls, the work share of your phone bill, delivery bags, phone mounts, chargers and work supplies.</li>
+      <li><strong>Don’t add these if you deduct miles:</strong> gas, oil, tires, repairs, car washes, insurance and registration. The IRS mileage rate already covers them.</li>
+      <li>Keep receipts for anything $75 or more, and for all lodging.</li></ul>`);
+
+    html += sec('Your data', `<ul>
+      <li>Trips, expenses and receipt photos are stored only on this phone. Odo has no account and sends nothing to us.</li>
+      <li>Deleting the app deletes your data, so keep that in mind before you delete it.</li></ul>`);
+
+    html += `<p class="note">Odo is a record-keeping tool, not tax advice. Ask a tax preparer about your situation.</p>`;
+    return html;
   }
 
   function tripsView() {
@@ -366,14 +622,7 @@
             <button class="btn primary" data-act="dash" data-v="1" type="button">Start shift</button></div>`;
     }
 
-    html += '<div class="period">' + [['week', 'Week'], ['2wk', '2 weeks'], ['month', 'Month'], ['year', 'Year']]
-      .map(([k, l]) => `<button data-act="period" data-k="${k}" class="${state.period === k ? 'on' : ''}" type="button">${l}</button>`)
-      .join('') + '</div>';
-    html += `<div class="range">
-        <button class="arrow" data-act="prev" type="button" aria-label="Previous">‹</button>
-        <h2>${esc(rangeLabel(state.period, r))}</h2>
-        <button class="arrow" data-act="next" type="button" aria-label="Next" ${state.offset >= 0 ? 'disabled' : ''}>›</button>
-      </div>`;
+    html += periodBar(r);
 
     html += `<div class="card totals">
         <div class="big">
@@ -512,6 +761,10 @@
       <input type="text" id="promptInput" maxlength="40" value="${esc(state.prefs.prompt)}" />
       <p class="note" style="margin:8px 0 0">Shown after each drive with Work and Personal buttons.</p></div>`;
 
+    html += `<div class="section-title">Help</div><div class="card"><div class="row">
+      <div><strong>Help &amp; tips</strong><p>How Odo works, Siri commands, and what you can deduct.</p></div>
+      <button class="btn" data-act="help" type="button">Open</button></div></div>`;
+
     if (tipsSupported()) {
       const n = state.tips ? state.tips.count : 0;
       html += `<div class="section-title">Support Odo</div><div class="card">
@@ -544,6 +797,7 @@
 
   function closeSheet() {
     state.openTripId = null;
+    state.expDraft = null;
     if (leafletMap) { leafletMap.remove(); leafletMap = null; }
     $('sheetBack').hidden = true;
     $('sheet').hidden = true;
@@ -668,6 +922,21 @@
       }
       if (state.status.auto) Tracker.setAuto({ enabled: true }).catch(() => {});
     }
+    else if (act === 'help') { ev.preventDefault(); state.helpFrom = state.tab === 'help' ? state.helpFrom : state.tab; state.tab = 'help'; render(); window.scrollTo(0, 0); }
+    else if (act === 'help-back') { state.tab = state.helpFrom || 'trips'; render(); window.scrollTo(0, 0); }
+    else if (act === 'open-exp') openExpense(id);
+    else if (act === 'photo') { syncDraft(); $('receiptFile').click(); }
+    else if (act === 'photo-zoom') el.classList.toggle('zoom');
+    else if (act === 'photo-remove') { syncDraft(); if (state.expDraft) { state.expDraft.photo = null; renderExpenseSheet(); } }
+    else if (act === 'exp-delete') {
+      const d = state.expDraft;
+      if (!d || !confirm('Delete this expense?')) return;
+      closeSheet();
+      state.expenses = state.expenses.filter((x) => x.id !== d.id);
+      if (d.photo) dropPhotoUrl(d.photo);
+      render();
+      try { await Exp.del(d.id); } catch (e) { toast('Could not delete'); }
+    }
     else if (act === 'tip') buyTip(el.dataset.id);
     else if (act === 'tip-later') { dismissTipNudge(); render(); }
     else if (act === 'welcome') {
@@ -694,15 +963,21 @@
   });
 
   document.addEventListener('keydown', (ev) => {
+    if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches('.trip[data-act=open-exp]')) {
+      ev.preventDefault();
+      openExpense(ev.target.dataset.id);
+    }
     if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches('.trip[data-act=open]')) {
       ev.preventDefault();
       openTrip(ev.target.dataset.id);
     }
-    if (ev.key === 'Escape' && state.openTripId) closeSheet();
+    if (ev.key === 'Escape' && !$('sheet').hidden) closeSheet();
   });
 
   document.addEventListener('change', (ev) => {
     const t = ev.target;
+    if (t.id === 'receiptFile') { const f = t.files && t.files[0]; t.value = ''; onReceiptPicked(f); return; }
+    if (t.id === 'expCat') { syncDraft(); renderExpenseSheet(); return; }
     if (t.id === 'autoToggle') toggleAuto(t.checked);
     else if (t.id === 'rateInput') {
       const c = parseFloat(t.value);
@@ -720,6 +995,7 @@
   });
 
   document.addEventListener('submit', (ev) => {
+    if (ev.target.id === 'expForm') { ev.preventDefault(); saveExpense(); return; }
     if (ev.target.id !== 'gigForm') return;
     ev.preventDefault();
     const v = $('gigInput').value.trim();
@@ -755,6 +1031,7 @@
     await loadPrefs();
     await loadStatus();
     await loadTrips();
+    loadExpenses();
     loadTips();
     startPolling();
   })();

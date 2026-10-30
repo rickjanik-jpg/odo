@@ -53,6 +53,10 @@ const entries = [
     '<string>Odo records your drives automatically, even when the app is closed, so no work miles are missed.</string>'],
   ['NSMotionUsageDescription',
     '<string>Odo uses motion data to notice when you start and stop driving, which saves battery.</string>'],
+  ['NSCameraUsageDescription',
+    '<string>Odo uses the camera to take photos of your receipts.</string>'],
+  ['NSPhotoLibraryUsageDescription',
+    '<string>Odo lets you attach receipt photos from your library.</string>'],
   ['UIBackgroundModes', '<array>\n\t\t<string>location</string>\n\t</array>'],
   ['ITSAppUsesNonExemptEncryption', '<false/>'],
 ];

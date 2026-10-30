@@ -285,3 +285,50 @@ body.welcoming { padding-bottom: var(--safe-b); }
   display: block; margin: 12px auto 0; border: none; background: none;
   color: var(--muted); font-weight: 600; font-size: 14px; padding: 8px 12px;
 }
+
+/* Header help button */
+.top-right { display: flex; align-items: center; gap: 12px; }
+.help-btn {
+  width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line); background: var(--card);
+  font-weight: 800; font-size: 16px; color: var(--muted); line-height: 1;
+}
+body.welcoming .help-btn { display: none; }
+.tabs button { font-size: 15px; }
+
+/* Expenses */
+.field.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+input[type=date] {
+  font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 10px; padding: 9px 12px; width: 100%; min-width: 0; -webkit-appearance: none; min-height: 42px;
+}
+.stat-value.small { font-size: 20px; }
+.trip.exp { grid-template-columns: 48px 1fr auto; }
+.exp-thumb { width: 48px; height: 48px; border-radius: 10px; object-fit: cover; background: var(--bg); display: block; }
+.exp-icon { display: grid; place-items: center; font-size: 22px; }
+.exp-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.receipt {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 100%;
+  min-height: 120px; margin-top: 12px; border: 2px dashed var(--line); border-radius: 14px; background: var(--bg);
+  font-weight: 600; padding: 14px;
+}
+.receipt small { font-weight: 400; font-size: 13px; color: var(--muted); }
+.receipt-icon { font-size: 28px; }
+.receipt.has { border-style: solid; padding: 0; overflow: hidden; min-height: 0; }
+.receipt.has img { width: 100%; max-height: 260px; object-fit: contain; background: #000; display: block; }
+.receipt-actions { display: flex; justify-content: center; gap: 8px; }
+.receipt-actions .link-btn { margin: 6px 0 0; }
+.link-btn.danger { color: var(--danger); }
+.warn {
+  margin-top: 14px; padding: 12px; border-radius: 12px; background: var(--warn-soft); color: var(--ink); font-size: 14px;
+}
+.warn strong { display: block; color: var(--warn); margin-bottom: 2px; }
+.note.center { text-align: center; }
+.note a { color: var(--accent); font-weight: 600; }
+
+/* Help */
+.back-link { border: none; background: none; color: var(--accent); font-weight: 600; font-size: 16px; padding: 4px 0; margin-top: 4px; }
+.page-title { font-size: 26px; letter-spacing: -.02em; margin: 6px 0 0; }
+.card.help ul { margin: 0; padding-left: 18px; font-size: 15px; line-height: 1.45; }
+.card.help li { margin: 0 0 8px; }
+.card.help li:last-child { margin-bottom: 0; }
+.receipt.has.zoom img { max-height: none; }

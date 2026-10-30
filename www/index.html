@@ -11,7 +11,10 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="logo" aria-hidden="true"></span>Odo</div>
-    <div id="liveDot" class="live" hidden>Recording</div>
+    <div class="top-right">
+      <div id="liveDot" class="live" hidden>Recording</div>
+      <button id="helpBtn" class="help-btn" data-act="help" type="button" aria-label="Help">?</button>
+    </div>
   </header>
 
   <main id="view"></main>
@@ -20,14 +23,17 @@
 
   <nav class="tabs">
     <button data-tab="trips" class="active" type="button">Trips</button>
+    <button data-tab="expenses" type="button">Expenses</button>
     <button data-tab="settings" type="button">Settings</button>
   </nav>
 
   <div id="sheetBack" class="sheet-back" hidden></div>
   <section id="sheet" class="sheet" hidden aria-modal="true" role="dialog"></section>
   <div id="toast" class="toast" hidden></div>
+  <input type="file" id="receiptFile" accept="image/*" hidden />
 
   <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="expenses.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
