@@ -666,6 +666,166 @@
     toast(`Imported ${added} trip${added === 1 ? '' : 's'}`, 4000);
   }
 
+  // ---------- backup and restore ----------
+
+  const BACKUP_KEY = 'odo.lastBackup';
+  const BACKUP_SNOOZE = 'odo.backupSnooze';
+
+  function lastBackup() { return parseInt(safeGet(BACKUP_KEY), 10) || 0; }
+
+  function ago(ms) {
+    const days = Math.floor((Date.now() - ms) / 86400000);
+    if (days <= 0) return 'today';
+    if (days === 1) return 'yesterday';
+    if (days < 60) return `${days} days ago`;
+    return dayFmt.format(ms);
+  }
+
+  /** Remind after 15 trips with no backup, or 30 days since the last one. "Later" waits 14 days. */
+  function backupDue() {
+    if (!isNative && !/[?&]ios\b/.test(location.search)) return false;
+    if (Date.now() < (parseInt(safeGet(BACKUP_SNOOZE), 10) || 0)) return false;
+    const last = lastBackup();
+    if (!last) return state.trips.length >= 15;
+    return Date.now() - last > 30 * 86400000 && state.trips.some((t) => t.start > last);
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+  }
+
+  async function dataUrlToBlob(url) {
+    const res = await fetch(url);
+    return res.blob();
+  }
+
+  async function makeBackup() {
+    let trips = state.trips;
+    try {
+      const r = await Tracker.getTrips();
+      trips = r.json ? JSON.parse(r.json) : (r.trips || trips);
+    } catch (e) { /* use what's on screen */ }
+    let expenses = [];
+    try { expenses = Exp ? await Exp.all() : []; } catch (e) { expenses = state.expenses; }
+    const exp = [];
+    for (const e of expenses) {
+      const copy = Object.assign({}, e);
+      copy.photo = e.photo ? await blobToDataUrl(e.photo) : null;
+      exp.push(copy);
+    }
+    return {
+      app: 'odo', version: 2, exported: new Date().toISOString(),
+      prefs: state.prefs, rate: state.rate, trips, expenses: exp,
+    };
+  }
+
+  async function saveBackup(btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
+    try {
+      const data = await makeBackup();
+      const name = `Odo backup ${ymd(Date.now())}.json`;
+      const text = JSON.stringify(data);
+      let saved = false;
+      if (isNative) {
+        const r = await Tracker.shareFile({ name, text });
+        saved = !!(r && r.completed);
+      } else {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+        saved = true;
+      }
+      if (saved) {
+        safeSet(BACKUP_KEY, String(Date.now()));
+        toast(`Backup saved: ${data.trips.length} trip${data.trips.length === 1 ? '' : 's'}, ${data.expenses.length} expense${data.expenses.length === 1 ? '' : 's'}`, 4000);
+      }
+    } catch (e) {
+      toast('The backup didn’t work. Try again.');
+    }
+    render();
+  }
+
+  let pendingRestore = null;
+
+  async function onRestorePicked(file) {
+    if (!file) return;
+    let data;
+    try {
+      data = JSON.parse(await file.text());
+    } catch (e) {
+      data = null;
+    }
+    if (!data || data.app !== 'odo' || !Array.isArray(data.trips)) {
+      openSheetWith(`<h3 style="margin-top:4px">Restore</h3>
+        <p class="warn" style="margin-top:12px"><strong>That isn’t an Odo backup</strong>
+        Pick the file named “Odo backup …json” that you saved from Odo.</p>
+        <div class="sheet-actions"><button class="btn primary" data-act="close" type="button">OK</button></div>`);
+      return;
+    }
+    const haveT = new Set(state.trips.map((t) => t.id));
+    const haveE = new Set(state.expenses.map((e) => e.id));
+    const trips = data.trips.filter((t) => t && t.id && typeof t.miles === 'number' && !haveT.has(t.id));
+    const exps = (data.expenses || []).filter((e) => e && e.id && !haveE.has(e.id));
+    pendingRestore = { trips, exps, prefs: data.prefs };
+    const when = data.exported ? dayFmt.format(new Date(data.exported)) : 'an earlier date';
+    if (!trips.length && !exps.length) {
+      openSheetWith(`<h3 style="margin-top:4px">Nothing to restore</h3>
+        <div class="sub">Backup from ${esc(when)}</div>
+        <p class="note" style="margin:12px 0 0">Everything in this backup is already in Odo.</p>
+        <div class="sheet-actions"><button class="btn primary" data-act="close" type="button">OK</button></div>`);
+      return;
+    }
+    const workMi = trips.filter((t) => t.type === 'work').reduce((a, t) => a + t.miles, 0);
+    openSheetWith(`<h3 style="margin-top:4px">Restore this backup?</h3>
+      <div class="sub">Saved ${esc(when)}</div>
+      <ul class="import-sample">
+        <li><span>Trips to add</span><span></span><strong>${trips.length}</strong></li>
+        <li><span>Work miles in them</span><span></span><strong>${mi(workMi)} mi</strong></li>
+        <li><span>Expenses to add</span><span></span><strong>${exps.length}</strong></li>
+        <li><span>Receipt photos</span><span></span><strong>${exps.filter((e) => e.photo).length}</strong></li>
+      </ul>
+      <p class="note" style="margin:8px 0 0">Nothing already in Odo is changed or removed.</p>
+      <div class="sheet-actions">
+        <button class="btn" data-act="close" type="button">Cancel</button>
+        <button class="btn primary" data-act="restore-go" type="button">Restore</button>
+      </div>`);
+  }
+
+  async function runRestore() {
+    const r = pendingRestore;
+    pendingRestore = null;
+    if (!r) return;
+    try {
+      if (r.trips.length) await Tracker.addTrips({ json: JSON.stringify(r.trips) });
+      for (const e of r.exps) {
+        const copy = Object.assign({}, e);
+        copy.photo = e.photo ? await dataUrlToBlob(e.photo) : null;
+        await Exp.put(copy);
+      }
+      if (r.prefs && Array.isArray(r.prefs.gigs)) {
+        const merged = state.prefs.gigs.slice();
+        for (const g of r.prefs.gigs) if (!merged.some((x) => x.toLowerCase() === String(g).toLowerCase())) merged.push(g);
+        if (merged.length !== state.prefs.gigs.length) { state.prefs.gigs = merged.slice(0, 6); await savePrefs(); }
+      }
+    } catch (e) {
+      toast('The restore stopped partway. Run it again to finish; nothing will be doubled.', 5000);
+    }
+    closeSheet();
+    await loadTrips();
+    await loadExpenses();
+    state.tab = 'trips';
+    render();
+    toast(`Restored ${r.trips.length} trip${r.trips.length === 1 ? '' : 's'} and ${r.exps.length} expense${r.exps.length === 1 ? '' : 's'}`, 4000);
+  }
+
   // ---------- help ----------
 
   function helpView() {
@@ -751,7 +911,14 @@
         <div><div class="stat-label">Need a label</div><div class="stat-value">${pending}<span class="unit">${pending === 1 ? 'trip' : 'trips'}</span></div></div>
       </div>`;
 
-    if (tipsSupported() && !state.tipNudgeOff && state.trips.length >= 20 && state.tips && state.tips.list.length && !state.tips.count) {
+    if (backupDue()) {
+      html += `<div class="card banner backup-nudge"><p><strong>Back up your trips</strong>
+          ${lastBackup() ? `Your last backup was ${esc(ago(lastBackup()))}.` : 'You have no backup yet.'} Save one to Files or iCloud Drive so nothing is lost.</p>
+        <div class="nudge-btns"><button class="btn primary" data-act="backup" type="button">Back up</button>
+        <button class="link-btn" data-act="backup-later" type="button">Later</button></div></div>`;
+    }
+
+    if (!backupDue() && tipsSupported() && !state.tipNudgeOff && state.trips.length >= 20 && state.tips && state.tips.list.length && !state.tips.count) {
       html += `<div class="card tip-nudge"><p><strong>Enjoying Odo?</strong>
           It’s free with no ads or subscription. A small tip helps keep it that way.</p>
         ${tipButtons()}
@@ -885,6 +1052,16 @@
       <input type="text" id="promptInput" maxlength="40" value="${esc(state.prefs.prompt)}" />
       <p class="note" style="margin:8px 0 0">Shown after each drive with Work and Personal buttons.</p></div>`;
 
+    const last = lastBackup();
+    html += `<div class="section-title">Backup</div><div class="card">
+      <div class="row"><div><strong>Save a backup</strong><p>One file with all your trips, expenses, receipt photos and settings.
+        Save it to Files or iCloud Drive. ${last ? `Last backup: ${esc(ago(last))}.` : '<span class="warn-text">No backup yet.</span>'}</p></div>
+        <button class="btn primary" data-act="backup" type="button">Save</button></div>
+      <div class="row"><div><strong>Restore from a backup</strong><p>Adds anything that’s missing. Trips and expenses already here are kept as they are.</p></div>
+        <button class="btn" data-act="restore" type="button">Choose file</button></div>
+    </div>
+    <p class="note">Odo keeps everything on this phone only. If you delete the app or lose your phone without a backup, your trips can’t be recovered.</p>`;
+
     html += `<div class="section-title">Past trips</div><div class="card"><div class="row">
       <div><strong>Import from a spreadsheet</strong><p>Bring in miles you logged before Odo. In Excel, choose File → Save As → CSV, then pick that file here.</p></div>
       <button class="btn" data-act="import" type="button">Choose file</button></div></div>
@@ -976,10 +1153,28 @@
     }
   }
 
+  const snapCache = new Map(); // trip id + theme -> Apple Maps picture
+
   function drawRoute(t) {
     const el = $('map');
     const path = t.path || [];
     if (leafletMap) { leafletMap.remove(); leafletMap = null; }
+    const outline = `<svg class="outline" viewBox="0 0 320 220" preserveAspectRatio="xMidYMid meet"><path d="${routeD(path, 320, 220, 24)}"/></svg>`;
+
+    // iPhone: a picture of the route on Apple Maps, drawn by the phone itself.
+    if (PLATFORM === 'ios' && path.length > 1) {
+      const dark = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      const key = t.id + (dark ? ':d' : ':l') + ':' + path.length;
+      const show = (src) => { if ($('map') === el && state.openTripId === t.id) el.innerHTML = `<img class="map-img" src="${src}" alt="Map of this trip" />`; };
+      if (snapCache.has(key)) { show(snapCache.get(key)); return; }
+      el.innerHTML = outline;
+      const w = Math.round(el.clientWidth || 340), h = Math.round(el.clientHeight || 220);
+      Tracker.mapSnapshot({ path: JSON.stringify(path), width: w, height: h, dark })
+        .then((r) => { if (r && r.image) { snapCache.set(key, r.image); show(r.image); } })
+        .catch(() => { /* keep the outline */ });
+      return;
+    }
+
     if (window.L && navigator.onLine && path.length > 1) {
       try {
         leafletMap = L.map(el, { zoomControl: false, attributionControl: true });
@@ -1058,6 +1253,10 @@
     }
     else if (act === 'help') { ev.preventDefault(); state.helpFrom = state.tab === 'help' ? state.helpFrom : state.tab; state.tab = 'help'; render(); window.scrollTo(0, 0); }
     else if (act === 'help-back') { state.tab = state.helpFrom || 'trips'; render(); window.scrollTo(0, 0); }
+    else if (act === 'backup') saveBackup(el);
+    else if (act === 'backup-later') { safeSet(BACKUP_SNOOZE, String(Date.now() + 14 * 86400000)); render(); }
+    else if (act === 'restore') $('restoreFile').click();
+    else if (act === 'restore-go') runRestore();
     else if (act === 'add-trip') openAddTrip();
     else if (act === 'import') $('importFile').click();
     else if (act === 'import-go') runImport();
@@ -1113,6 +1312,7 @@
 
   document.addEventListener('change', (ev) => {
     const t = ev.target;
+    if (t.id === 'restoreFile') { const f = t.files && t.files[0]; t.value = ''; onRestorePicked(f); return; }
     if (t.id === 'importFile') { const f = t.files && t.files[0]; t.value = ''; onImportPicked(f); return; }
     if (t.id === 'receiptFile') { const f = t.files && t.files[0]; t.value = ''; onReceiptPicked(f); return; }
     if (t.id === 'expCat') { syncDraft(); renderExpenseSheet(); return; }
@@ -1266,6 +1466,7 @@
         if (t) { if (type != null) t.type = type; if (purpose != null) t.purpose = purpose; if (miles != null) t.miles = miles; }
         return { ok: !!t };
       },
+      async shareFile() { return { completed: true }; },
       async addTrips({ json }) {
         const have = new Set(trips.map((t) => t.id));
         const fresh = JSON.parse(json).filter((t) => !have.has(t.id));

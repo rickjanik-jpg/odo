@@ -207,6 +207,39 @@ public class OdoTrackerPlugin extends Plugin {
         }
     }
 
+    /** Writes a backup file and opens Android's share sheet (Drive, Files, email...). */
+    @PluginMethod
+    public void shareFile(PluginCall call) {
+        String name = call.getString("name");
+        String text = call.getString("text");
+        if (name == null || text == null) {
+            call.reject("name and text are required");
+            return;
+        }
+        try {
+            java.io.File dir = new java.io.File(getContext().getCacheDir(), "share");
+            dir.mkdirs();
+            java.io.File f = new java.io.File(dir, name.replace('/', '-'));
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+                out.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                    getContext(), getContext().getPackageName() + ".fileprovider", f);
+            Intent send = new Intent(Intent.ACTION_SEND)
+                    .setType("application/json")
+                    .putExtra(Intent.EXTRA_STREAM, uri)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            Intent chooser = Intent.createChooser(send, "Save Odo backup");
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(chooser);
+            JSObject ret = new JSObject();
+            ret.put("completed", true);
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("Couldn't create the backup file");
+        }
+    }
+
     @PluginMethod
     public void deleteTrip(PluginCall call) {
         String id = call.getString("id");

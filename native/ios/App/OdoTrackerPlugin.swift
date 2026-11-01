@@ -25,6 +25,8 @@ public class OdoTrackerPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "setPrefs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getTips", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "buyTip", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "shareFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "mapSnapshot", returnType: CAPPluginReturnPromise),
     ]
 
     private var observers: [NSObjectProtocol] = []

@@ -344,3 +344,10 @@ input[type=time] {
 .import-sample li { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); }
 .import-sample li span:nth-child(2) { color: var(--muted); }
 main { padding-bottom: 96px; }
+
+/* Backup */
+.warn-text { color: var(--warn); font-weight: 600; }
+.backup-nudge { flex-wrap: wrap; }
+.backup-nudge .nudge-btns { display: flex; align-items: center; gap: 4px; }
+.backup-nudge .link-btn { margin: 0; }
+.map-img { width: 100%; height: 100%; object-fit: cover; display: block; }

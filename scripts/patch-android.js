@@ -76,4 +76,14 @@ if (!gradle.includes('play-services-location')) {
   fs.writeFileSync(gradlePath, gradle);
 }
 
+// 5. Let the share sheet read backup files from the app's cache folder.
+const pathsXml = path.join(app, 'src', 'main', 'res', 'xml', 'file_paths.xml');
+if (fs.existsSync(pathsXml)) {
+  let x = fs.readFileSync(pathsXml, 'utf8');
+  if (!x.includes('name="odo_share"')) {
+    x = x.replace('</paths>', '    <cache-path name="odo_share" path="share/" />\n</paths>');
+    fs.writeFileSync(pathsXml, x);
+  }
+}
+
 console.log('Odo native code added to the Android project.');
