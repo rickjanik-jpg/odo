@@ -10,6 +10,8 @@ target = project.targets.find { |t| t.name == 'App' } or abort('ios-add-files: A
 
 # Shortcuts actions need iOS 16 or newer.
 target.build_configurations.each do |c|
+  # iPhone only: Odo is a phone app, and this means Apple doesn't ask for iPad screenshots.
+  c.build_settings['TARGETED_DEVICE_FAMILY'] = '1'
   current = c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'].to_s
   if current.empty? || Gem::Version.new(current) < Gem::Version.new('16.0')
     c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
