@@ -133,11 +133,19 @@
 
   // ---------- data ----------
 
+  /** A recorded trip of 20+ miles averaging over 120 mph was a flight, not a drive. */
+  function isFlight(t) {
+    if (t.added || t.manual) return false;
+    const hours = (t.end - t.start) / 3600000;
+    return t.miles >= 20 && hours > 0 && t.miles / hours > 120;
+  }
+
   async function loadTrips() {
     try {
       const r = await Tracker.getTrips();
       const list = r.json ? JSON.parse(r.json) : (r.trips || []);
-      state.trips = list.slice().sort((a, b) => b.start - a.start);
+      // Recorded trips that averaged faster than any car (flights from before Odo filtered them) are hidden.
+      state.trips = list.filter((t) => !isFlight(t)).sort((a, b) => b.start - a.start);
     } catch (e) {
       toast('Could not load trips');
     }
