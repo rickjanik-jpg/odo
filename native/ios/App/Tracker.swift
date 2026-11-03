@@ -40,6 +40,9 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
     private var path: [[Double]] = []
     private var sinceSave = 0
     private var stillSince: Date?
+    private var flight = false        // this "trip" is really a flight: not saved
+    private var fastFixes = 0
+    private var afterFlightUntil = Date.distantPast
     private var lastShownMiles: Double = -1
 
     // Wake-up check
@@ -61,6 +64,10 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
     private static let probeMax: TimeInterval = 180
     private static let resumeWindow: TimeInterval = 15 * 60
     private static let maxStoredPoints = 300
+    /// 50 m/s is about 112 mph.
+    private static let flightSpeed: Double = 50
+    /// Airport taxiing is short; anything longer than this is treated as a real drive.
+    private static let taxiMaxMiles = 5.0
 
     // MARK: - Status
 
@@ -306,6 +313,8 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
         stillSince = nil
         sinceSave = 0
         lastShownMiles = -1
+        flight = false
+        fastFixes = 0
         if let s = seed {
             anchor = s
             path.append(point(s))
@@ -367,6 +376,7 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
     private func onFix(_ l: CLLocation) {
         guard l.horizontalAccuracy >= 0 else { return }
         lastFix = l
+        if mode != .tracking { checkLandedFromFlight(l) }
         switch mode {
         case .idle:
             // A significant-location wake-up. Ignore it if we're still where we parked.
@@ -382,6 +392,31 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
         }
     }
 
+    /// Odo was asleep during a flight (phone in a bag, no GPS) and wakes up far from where it last parked,
+    /// faster than any car could have gone. Drop the short unlabeled taxi trip before takeoff, and treat
+    /// the next few minutes as the plane taxiing to the gate.
+    private func checkLandedFromFlight(_ l: CLLocation) {
+        guard let p = Prefs.park, l.horizontalAccuracy <= 1000 else { return }
+        let parked = CLLocation(latitude: p.lat, longitude: p.lng)
+        let d = l.distance(from: parked)
+        let dt = max(60, l.timestamp.timeIntervalSince(p.time))
+        guard d > 80_000, d / dt > 60 else { return }
+        afterFlightUntil = Date().addingTimeInterval(20 * 60)
+        Prefs.park = (l.coordinate.latitude, l.coordinate.longitude, l.timestamp)
+        let cutoff = (p.time.timeIntervalSince1970 - 3 * 3600) * 1000
+        var removed = false
+        for t in TripStore.all() where t.type == "pending" && !t.manual && t.added != true
+            && t.end >= cutoff && t.miles < Tracker.taxiMaxMiles {
+            if let last = t.path.last, last.count >= 2,
+               CLLocation(latitude: last[0], longitude: last[1]).distance(from: parked) < 3000 {
+                TripStore.delete(t.id)
+                clearNotification(t.id)
+                removed = true
+            }
+        }
+        if removed { NotificationCenter.default.post(name: .odoTripsChanged, object: nil) }
+    }
+
     private func trackFix(_ l: CLLocation) {
         let acc = l.horizontalAccuracy
         guard let a = anchor else {
@@ -391,6 +426,16 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
                 lastMove = Date()
             }
             return
+        }
+        // Planes: no car goes 112 mph for several readings, and no car covers miles in seconds.
+        if !manual && l.speed >= Tracker.flightSpeed && acc <= 65 {
+            fastFixes += 1
+            if fastFixes >= 3 { flight = true }
+        }
+        if !manual {
+            let gap = a.distance(from: l)
+            let gapTime = max(1, l.timestamp.timeIntervalSince(a.timestamp))
+            if gap > 20_000 && gap / gapTime > Tracker.flightSpeed { flight = true }
         }
         if acc > 40 { return } // too fuzzy to count
         let d = a.distance(from: l)
@@ -458,7 +503,9 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
         try? FileManager.default.removeItem(at: TripStore.currentURL)
 
         let mi = meters / 1609.344
-        let keep = manual ? mi >= 0.05 : mi >= Prefs.minAutoMiles
+        // A flight, or the plane taxiing to the gate right after landing, is not a drive.
+        let taxiAfterLanding = !manual && startTime < afterFlightUntil && mi < Tracker.taxiMaxMiles
+        let keep = !flight && !taxiAfterLanding && (manual ? mi >= 0.05 : mi >= Prefs.minAutoMiles)
         if keep {
             let end = endAt ?? (manual ? Date() : lastMove)
             let trip = makeTrip(miles: mi, end: end)
@@ -529,7 +576,8 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
             path: path,
             aLat: anchor?.coordinate.latitude,
             aLng: anchor?.coordinate.longitude,
-            aTime: anchor.map { $0.timestamp.timeIntervalSince1970 * 1000 }
+            aTime: anchor.map { $0.timestamp.timeIntervalSince1970 * 1000 },
+            flight: flight ? true : nil
         )
         if let data = try? JSONEncoder().encode(c) {
             try? data.write(to: TripStore.currentURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
@@ -549,6 +597,8 @@ final class Tracker: NSObject, CLLocationManagerDelegate, UNUserNotificationCent
         sinceSave = 0
         lastShownMiles = -1
         anchor = nil
+        flight = c.flight ?? false
+        fastFixes = 0
         if let lat = c.aLat, let lng = c.aLng {
             anchor = CLLocation(coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lng), altitude: 0,
                                 horizontalAccuracy: 20, verticalAccuracy: -1,

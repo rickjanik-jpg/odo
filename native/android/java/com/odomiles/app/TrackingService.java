@@ -66,6 +66,9 @@ public class TrackingService extends Service {
     private final ArrayList<double[]> path = new ArrayList<>();
     private int sinceSave = 0;
     private double lastShownMiles = -1;
+    /** A "drive" faster than any car (a flight) is not saved. */
+    private boolean flight = false;
+    private int fastFixes = 0;
 
     private final LocationCallback callback = new LocationCallback() {
         @Override
@@ -207,6 +210,8 @@ public class TrackingService extends Service {
         path.clear();
         sinceSave = 0;
         lastShownMiles = -1;
+        flight = false;
+        fastFixes = 0;
 
         // Drive detection takes a moment, so start the trip where the phone last was.
         try {
@@ -256,6 +261,12 @@ public class TrackingService extends Service {
             }
             return;
         }
+        // Planes: several readings over ~112 mph, or miles covered in seconds.
+        if (!manual && l.hasSpeed() && l.getSpeed() >= 50 && acc <= 65 && ++fastFixes >= 3) flight = true;
+        float gap = anchor.distanceTo(l);
+        long gapMs = Math.max(1000, l.getTime() - anchor.getTime());
+        if (!manual && gap > 20000 && gap / (gapMs / 1000.0) > 50) flight = true;
+
         if (acc > 40) return; // too fuzzy to count
 
         float d = anchor.distanceTo(l);
@@ -308,7 +319,7 @@ public class TrackingService extends Service {
         TripStore.currentFile(this).delete();
 
         double miles = meters / 1609.344;
-        boolean keep = manual ? miles >= 0.05 : miles >= Prefs.MIN_AUTO_MILES;
+        boolean keep = !flight && (manual ? miles >= 0.05 : miles >= Prefs.MIN_AUTO_MILES);
         if (keep) {
             long end = manual ? System.currentTimeMillis() : lastMoveTime;
             JSONObject trip = buildTrip(miles, end);

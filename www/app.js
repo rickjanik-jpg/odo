@@ -858,7 +858,8 @@
       <li>Location must be set to <strong>${ios ? 'Always' : 'Allow all the time'}</strong>, with Precise Location on.</li>
       <li>Don’t swipe Odo away in the app switcher. ${ios ? 'iPhone may not wake it for your next drive if you do.' : 'Android may stop it until you open it again.'}</li>
       ${ios ? '<li>Low Power Mode can delay detection. Odo still starts the trip from where you parked.</li>' : '<li>Set battery use for Odo to <strong>Unrestricted</strong> so your phone doesn’t shut it down mid-shift.</li>'}
-      <li>Forgot to label a trip? It waits on the Trips screen under “Need a label.”</li></ul>`);
+      <li>Forgot to label a trip? It waits on the Trips screen under “Need a label.”</li>
+      <li>Flying? Odo ignores flights, including the plane taxiing before takeoff and after landing.</li></ul>`);
 
     html += sec('Expenses', `<ul>
       <li>Add work costs on the <strong>Expenses</strong> tab and snap a photo of the receipt.</li>

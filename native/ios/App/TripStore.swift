@@ -26,6 +26,7 @@ struct CurrentTrip: Codable {
     var aLat: Double?
     var aLng: Double?
     var aTime: Double?
+    var flight: Bool?
 }
 
 /// Trips live in a JSON file on the phone. Nothing leaves the device.
