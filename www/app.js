@@ -1085,8 +1085,9 @@
       <div><strong>Help &amp; tips</strong><p>How Odo works, Siri commands, and what you can deduct.</p></div>
       <button class="btn" data-act="help" type="button">Open</button></div></div>`;
 
-    if (tipsSupported()) {
-      const n = state.tips ? state.tips.count : 0;
+    // Only show tips once Apple has returned them, so a reviewer never sees a broken section.
+    if (tipsSupported() && state.tips && state.tips.list.length) {
+      const n = state.tips.count;
       html += `<div class="section-title">Support Odo</div><div class="card">
         <div><strong>Leave a tip</strong><p class="note" style="margin:4px 0 0">Odo is free with no ads or subscription.
           If it saves you time or money, a tip helps keep it that way. Tips don’t unlock anything.</p></div>
