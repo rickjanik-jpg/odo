@@ -25,7 +25,7 @@
     expenses: [],
     expDraft: null,      // expense being added or edited in the sheet
     tipNudgeOff: safeGet('odo.tipNudgeOff') === '1',
-    period: safeGet(PERIOD_KEY) || 'week',
+    period: ['day', 'week', 'month', 'year'].includes(safeGet(PERIOD_KEY)) ? safeGet(PERIOD_KEY) : 'week',
     offset: 0,
     rate: parseFloat(safeGet(RATE_KEY)) || DEFAULT_RATE,
     openTripId: null,
@@ -69,12 +69,12 @@
   function range(kind, off) {
     const now = new Date();
     let s, e;
-    if (kind === 'week') {
+    if (kind === 'day') {
+      s = startOfDay(now); s.setDate(s.getDate() + off);
+      e = new Date(s); e.setDate(e.getDate() + 1);
+    } else if (kind === 'week') {
       s = monday(now); s.setDate(s.getDate() + 7 * off);
       e = new Date(s); e.setDate(e.getDate() + 7);
-    } else if (kind === '2wk') {
-      s = monday(now); s.setDate(s.getDate() - 7 + 14 * off);
-      e = new Date(s); e.setDate(e.getDate() + 14);
     } else if (kind === 'month') {
       s = new Date(now.getFullYear(), now.getMonth() + off, 1);
       e = new Date(s.getFullYear(), s.getMonth() + 1, 1);
@@ -87,7 +87,12 @@
 
   function rangeLabel(kind, r) {
     const thisYear = new Date().getFullYear();
-    if (kind === 'year') return String(r.s.getFullYear());
+    if (kind === 'year') return `Jan 1 – Dec 31, ${r.s.getFullYear()}`;
+    if (kind === 'day') {
+      if (r.s.getTime() === startOfDay(new Date()).getTime()) return 'Today, ' + monFmt.format(r.s);
+      const label = r.s.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+      return r.s.getFullYear() === thisYear ? label : label + ', ' + r.s.getFullYear();
+    }
     if (kind === 'month') {
       return r.s.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
     }
@@ -359,7 +364,7 @@
   }
 
   function periodBar(r) {
-    return '<div class="period">' + [['week', 'Week'], ['2wk', '2 weeks'], ['month', 'Month'], ['year', 'Year']]
+    return '<div class="period">' + [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['year', 'Calendar year']]
       .map(([k, l]) => `<button data-act="period" data-k="${k}" class="${state.period === k ? 'on' : ''}" type="button">${l}</button>`)
       .join('') + `</div><div class="range">
         <button class="arrow" data-act="prev" type="button" aria-label="Previous">‹</button>
