@@ -364,7 +364,7 @@
   }
 
   function periodBar(r) {
-    return '<div class="period">' + [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['year', 'Calendar year']]
+    return '<div class="period">' + [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['year', 'Year']]
       .map(([k, l]) => `<button data-act="period" data-k="${k}" class="${state.period === k ? 'on' : ''}" type="button">${l}</button>`)
       .join('') + `</div><div class="range">
         <button class="arrow" data-act="prev" type="button" aria-label="Previous">‹</button>

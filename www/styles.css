@@ -355,5 +355,5 @@ main { padding-bottom: 96px; }
 /* Period filters: four chips that always fit, Calendar year a bit wider */
 .period { overflow: visible; }
 .period button { flex: 1 1 auto; padding: 8px 6px; min-width: 0; }
-.period button[data-k="year"] { flex-grow: 1.6; }
+
 @media (max-width: 370px) { .period { gap: 4px; } .period button { font-size: 13px; padding: 8px 4px; } }
